@@ -1,0 +1,13 @@
+{
+  "name": "aws-architect-academy",
+  "private": true,
+  "description": "Interactive study materials for AWS Solutions Architect Associate and Professional",
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "validate": "node scripts/validate.js",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0"
+  }
+}

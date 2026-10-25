@@ -12,6 +12,10 @@
   const shuffle = arr => { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
   const pct = (n, d) => d ? Math.round((n / d) * 100) : 0;
   const sameSet = (a, b) => a.length === b.length && a.every(x => b.includes(x));
+  // Ignore shortcut keys while the user is typing in a form field.
+  const isTyping = e => !!(e.target && e.target.closest && e.target.closest('input, select, textarea'));
+  // Space/Enter on a focused button should just press that button.
+  const onButton = e => (e.key === ' ' || e.key === 'Enter') && !!(e.target && e.target.closest && e.target.closest('button'));
 
   // Each view may register a cleanup (timers, key handlers) that runs on navigation.
   let cleanup = null;
@@ -355,7 +359,7 @@
       $$('[data-f]').forEach(b => b.onclick = () => setQuery({ filter: b.dataset.f }));
     }
     function onKey(e) {
-      if (e.target.matches('input, select, textarea')) return;
+      if (isTyping(e) || onButton(e)) return;
       const q = pool[i]; if (!q) return;
       const k = e.key.toUpperCase();
       const idx = LETTERS.indexOf(k);
@@ -604,7 +608,7 @@
       seen++; current = draw(); flipped = false; render();
     }
     function onKey(e) {
-      if (e.target.matches('input, select, textarea') || !cards.length) return;
+      if (isTyping(e) || onButton(e) || !cards.length) return;
       if (e.key === ' ') { e.preventDefault(); flip(); }
       else if (flipped && e.key === '1') grade('again');
       else if (flipped && e.key === '2') grade('hard');

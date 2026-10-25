@@ -40,5 +40,6 @@ window.TRACKS.saa = {
 
 ```bash
 node scripts/validate.js
+npm test                      # browser tests (first run: npm install && npx playwright install chromium)
 python3 -m http.server 8000   # then click through your changes
 ```

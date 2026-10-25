@@ -36,7 +36,13 @@
     addExam(result) { state.exams.unshift(result); state.exams = state.exams.slice(0, 30); save(); },
 
     exportJSON: () => JSON.stringify(state, null, 2),
-    importJSON(text) { state = Object.assign(empty(), JSON.parse(text)); save(); },
+    importJSON(text) {
+      const data = JSON.parse(text);
+      if (!data || typeof data !== 'object' || Array.isArray(data) || !['lessons', 'q', 'cards', 'exams'].some(k => k in data)) {
+        throw new Error('Not a progress export');
+      }
+      state = Object.assign(empty(), data); save();
+    },
     reset() { state = empty(); save(); }
   };
 

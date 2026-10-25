@@ -141,7 +141,7 @@ window.TRACKS.saa = {
 <tr><td>Amazon GuardDuty</td><td>Managed threat detection using ML on CloudTrail events, VPC Flow Logs and DNS logs, with optional protection for S3, EKS, RDS, Lambda, runtime and malware scanning. No agents needed for the core sources.</td><td>Compromised instance, crypto-mining, unusual API calls</td></tr>
 <tr><td>Amazon Macie</td><td>Discovers sensitive data (PII, credentials, financial data) in S3 using ML and pattern matching</td><td>Find PII in S3 buckets</td></tr>
 <tr><td>Amazon Inspector</td><td>Continuous vulnerability scanning of EC2 instances, ECR container images and Lambda functions</td><td>CVEs, unpatched software, network reachability</td></tr>
-<tr><td>AWS Security Hub</td><td>Aggregates findings and runs security standards checks across accounts</td><td>Single pane of glass, compliance score</td></tr>
+<tr><td>AWS Security Hub</td><td>Aggregates findings and runs security standards checks across accounts (the posture-check feature is now branded Security Hub CSPM)</td><td>Single pane of glass, compliance score</td></tr>
 <tr><td>Amazon Detective</td><td>Investigates root cause using graph analysis of logs</td><td>Investigate a GuardDuty finding</td></tr>
 <tr><td>AWS Config</td><td>Records resource configuration history and evaluates rules; can auto-remediate</td><td>Compliance over time, “who changed this security group”</td></tr>
 <tr><td>AWS CloudTrail</td><td>Logs API calls (who did what, when, from where)</td><td>Audit trail of API activity</td></tr>
@@ -221,7 +221,7 @@ window.TRACKS.saa = {
             {
               heading: 'CloudHSM and ACM',
               html: `<p><strong>AWS CloudHSM</strong> gives you dedicated, single-tenant, FIPS-validated hardware security modules in your VPC. You manage the users and keys; AWS cannot access them. Choose it when a regulation requires exclusive control of the HSM, or for workloads like SSL offload, Oracle TDE, or custom key stores for KMS.</p>
-<p><strong>AWS Certificate Manager (ACM)</strong> provisions free public TLS certificates and renews them automatically for integrated services: ELB, CloudFront, API Gateway, App Runner. ACM certificates are Regional; for <strong>CloudFront you must request or import the certificate in us-east-1</strong>. Public ACM certificates cannot be installed directly on EC2 instances (use them on a load balancer in front).</p>`
+<p><strong>AWS Certificate Manager (ACM)</strong> provisions free public TLS certificates and renews them automatically for integrated services: ELB, CloudFront, API Gateway, App Runner. ACM certificates are Regional; for <strong>CloudFront you must request or import the certificate in us-east-1</strong>. Standard public ACM certificates cannot be exported, so for EC2 fleets terminate TLS on a load balancer (or CloudFront) using ACM. ACM now also offers <em>exportable</em> public certificates for an extra fee, but the exam pattern remains “put ACM on the ELB”.</p>`
             },
             {
               heading: 'Secrets Manager vs Systems Manager Parameter Store',
@@ -359,6 +359,103 @@ window.TRACKS.saa = {
             'If the question says “consistent network performance and private connection”, think Direct Connect; add VPN for encryption or as a backup.'
           ],
           services: ['Amazon VPC', 'NAT gateway', 'Internet gateway', 'Security groups', 'Network ACLs', 'VPC endpoints', 'AWS PrivateLink', 'VPC peering', 'AWS Transit Gateway', 'AWS Site-to-Site VPN', 'AWS Direct Connect', 'AWS Client VPN']
+        },
+        {
+          id: 'monitoring-operations',
+          title: 'Monitoring, Auditing & Operations',
+          minutes: 15,
+          summary: 'CloudWatch metrics, alarms and Logs Insights, CloudTrail management vs data events, AWS Config rules and remediation, Systems Manager for keyless operations, and VPC Flow Logs.',
+          sections: [
+            {
+              heading: 'Who did what vs what is happening vs what changed',
+              html: `<p>Three services sound alike but answer different questions. Getting this split right solves a large share of operations questions.</p>
+<table>
+<thead><tr><th>Service</th><th>Answers</th><th>Typical exam phrase</th></tr></thead>
+<tbody>
+<tr><td>Amazon CloudWatch</td><td><strong>What is happening?</strong> Metrics, logs, alarms, dashboards</td><td>“Alert when CPU exceeds 80%”, “search application logs”</td></tr>
+<tr><td>AWS CloudTrail</td><td><strong>Who did what?</strong> A record of API calls: identity, time, source IP, parameters</td><td>“Find out who deleted the bucket / terminated the instance”</td></tr>
+<tr><td>AWS Config</td><td><strong>What changed, and is it compliant?</strong> Configuration history and rules</td><td>“Show the security group configuration last Tuesday”, “flag unencrypted volumes”</td></tr>
+</tbody>
+</table>
+<div class="callout">All three are detective. To <strong>prevent</strong> an action, use IAM policies or SCPs; to <strong>fix</strong> drift automatically, add Config remediation or an EventBridge rule that triggers automation.</div>`
+            },
+            {
+              heading: 'CloudWatch metrics, alarms and Logs',
+              html: `<ul>
+<li><strong>Metrics</strong>: EC2 sends basic metrics every 5 minutes for free; <strong>detailed monitoring</strong> gives 1-minute data. Memory, disk space and process metrics are <strong>not</strong> collected by default; install the <strong>CloudWatch agent</strong>. You can publish custom and high-resolution metrics.</li>
+<li><strong>Alarms</strong> watch a metric (or a metric math expression) and move between OK, ALARM and INSUFFICIENT_DATA. Actions: notify an <strong>SNS topic</strong>, run an <strong>Auto Scaling</strong> policy, or an <strong>EC2 action</strong> (stop, terminate, reboot, recover). <strong>Composite alarms</strong> combine several alarms to cut noise.</li>
+<li><strong>CloudWatch Logs</strong>: log groups and streams from the agent, Lambda, API Gateway, VPC Flow Logs, CloudTrail and more. Retention defaults to <strong>never expire</strong>, so set a retention policy to control cost. <strong>Metric filters</strong> turn log patterns (for example “ERROR”) into metrics you can alarm on. <strong>Subscription filters</strong> stream logs in near real time to Lambda, Kinesis Data Streams, Amazon Data Firehose or OpenSearch. Logs can also be exported to S3.</li>
+<li><strong>CloudWatch Logs Insights</strong>: an interactive query language to search, filter and aggregate log data across log groups with no infrastructure.</li>
+<li>Also useful: <strong>Synthetics canaries</strong> (scripted checks of endpoints), <strong>Container Insights</strong>, <strong>cross-account observability</strong> for a central monitoring account, and <strong>X-Ray</strong> / Application Signals for tracing.</li>
+</ul>`
+            },
+            {
+              heading: 'AWS CloudTrail',
+              html: `<table>
+<thead><tr><th>Event type</th><th>Examples</th><th>Logged by default?</th></tr></thead>
+<tbody>
+<tr><td><strong>Management events</strong> (control plane)</td><td>CreateBucket, RunInstances, AttachRolePolicy, ConsoleLogin</td><td>Yes: 90-day <em>Event history</em> in every account at no charge; a trail is needed to keep them longer</td></tr>
+<tr><td><strong>Data events</strong> (data plane, high volume)</td><td>S3 GetObject/PutObject/DeleteObject, Lambda Invoke, DynamoDB item operations</td><td><strong>No</strong>: enable explicitly on a trail or event data store; charged extra</td></tr>
+<tr><td><strong>Insights events</strong></td><td>Unusual spikes in API call rates or error rates</td><td>No: enable CloudTrail Insights</td></tr>
+</tbody>
+</table>
+<ul>
+<li>A <strong>trail</strong> delivers log files to an S3 bucket (optionally also to CloudWatch Logs for alarms). Make it <strong>multi-Region</strong>, enable <strong>log file integrity validation</strong> to detect tampering, and encrypt with SSE-KMS.</li>
+<li>An <strong>organization trail</strong>, created in the management account or a delegated administrator account, logs every member account automatically, and member accounts cannot modify or delete it. Send it to a bucket in a dedicated <strong>log archive account</strong>.</li>
+<li><strong>CloudTrail Lake</strong> stores events in event data stores you can query with SQL; or query trail files in S3 with Athena.</li>
+</ul>
+<div class="callout warn">Trap: “who downloaded this object from S3?” is a <strong>data event</strong>. If data events were not enabled, CloudTrail has no record of it.</div>`
+            },
+            {
+              heading: 'AWS Config: rules, conformance packs and remediation',
+              html: `<p>The <strong>configuration recorder</strong> captures configuration items for supported resources, building a timeline of every change and its relationships (which ENI, which security group). <strong>Config rules</strong> evaluate resources against desired settings, either on change or periodically:</p>
+<ul>
+<li><strong>Managed rules</strong> cover common checks: <code>s3-bucket-public-read-prohibited</code>, <code>encrypted-volumes</code>, <code>restricted-ssh</code>, <code>rds-multi-az-support</code>, required tags.</li>
+<li><strong>Custom rules</strong> are written as Lambda functions or in Guard policy syntax.</li>
+<li><strong>Conformance packs</strong> bundle rules and remediation actions into one deployable unit (for example, aligned to CIS or PCI DSS guidance) and can be deployed across an organization.</li>
+<li><strong>Remediation</strong> runs a Systems Manager <strong>Automation runbook</strong> on non-compliant resources, manually or automatically.</li>
+<li><strong>Aggregators</strong> collect compliance data from many accounts and Regions into one view.</li>
+</ul>
+<div class="callout">Config tells you a resource became non-compliant and can fix it afterwards; it does not stop the change from happening. Pair it with SCPs for prevention.</div>`
+            },
+            {
+              heading: 'Systems Manager and VPC Flow Logs',
+              html: `<table>
+<thead><tr><th>Systems Manager capability</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><strong>Session Manager</strong></td><td>Browser or CLI shell to instances with <strong>no SSH keys, no bastion host and no inbound ports</strong>; access controlled by IAM, sessions logged to S3 or CloudWatch Logs and recorded in CloudTrail</td></tr>
+<tr><td><strong>Parameter Store</strong></td><td>Hierarchical configuration values and SecureString secrets</td></tr>
+<tr><td><strong>Patch Manager</strong></td><td>Scans and installs OS and application patches using <strong>patch baselines</strong> and <strong>maintenance windows</strong>, with compliance reporting</td></tr>
+<tr><td><strong>Run Command</strong></td><td>Runs a command or script on a fleet of instances at once, without logging in</td></tr>
+<tr><td><strong>Automation</strong></td><td>Runbooks for multi-step operational tasks (also used by Config remediation)</td></tr>
+<tr><td>State Manager, Inventory, Fleet Manager</td><td>Keep configuration in a desired state, collect software inventory, manage nodes from the console</td></tr>
+</tbody>
+</table>
+<p>Managed nodes need the <strong>SSM Agent</strong> and permission (for example an instance profile with <code>AmazonSSMManagedInstanceCore</code>). Instances in private subnets without internet access reach Systems Manager through <strong>interface VPC endpoints</strong> (<code>ssm</code> and <code>ssmmessages</code>, plus <code>ec2messages</code> for older agents). On-premises servers can be managed too via hybrid activations.</p>
+<p><strong>VPC Flow Logs</strong> capture metadata about IP traffic (source, destination, ports, protocol, bytes, <strong>ACCEPT/REJECT</strong>) at the VPC, subnet or ENI level, published to CloudWatch Logs, S3 or Firehose. They do not capture packet contents (use <strong>Traffic Mirroring</strong> for that). Use them to troubleshoot security group and NACL rules, and query them with Logs Insights or Athena.</p>`
+            },
+            {
+              heading: 'Worked scenario',
+              html: `<p>An auditor asks a company with 30 accounts to prove who accessed confidential S3 objects, to show that SSH is never open to the internet, and to eliminate bastion hosts. The design: an <strong>organization trail</strong> with S3 <strong>data events</strong> enabled for the confidential buckets, delivered to a log archive account with integrity validation; an AWS Config <strong>conformance pack</strong> including <code>restricted-ssh</code> with automatic remediation through an SSM Automation runbook that removes the offending rule; <strong>Session Manager</strong> for all administrative access with session logs in S3; and CloudWatch <strong>metric filters and alarms</strong> on the trail log group for root-user sign-ins.</p>`
+            }
+          ],
+          keyPoints: [
+            `CloudWatch = metrics, logs and alarms; CloudTrail = API audit (who did what); Config = configuration history and compliance.`,
+            `Memory and disk metrics on EC2 require the CloudWatch agent.`,
+            `CloudTrail management events are on by default (90-day event history); data events such as S3 object reads must be enabled and cost extra.`,
+            `An organization trail logs all member accounts and cannot be altered by them; enable log file integrity validation.`,
+            `Config rules detect non-compliance; remediation runs SSM Automation; conformance packs deploy rule sets at scale.`,
+            `Session Manager replaces SSH and bastion hosts with IAM-controlled, logged sessions and no inbound ports.`,
+            `VPC Flow Logs record accepted and rejected traffic metadata, not packet payloads.`
+          ],
+          examTips: [
+            `If the question says “who made this API call / who deleted this resource”, think CloudTrail.`,
+            `If the question says “track configuration changes over time” or “continuously evaluate compliance”, think AWS Config (with remediation for auto-fix).`,
+            `If the question says “remote access to instances without opening port 22 or managing bastions”, think Systems Manager Session Manager.`,
+            `If the question says “alert on a pattern in application logs”, think CloudWatch Logs metric filter plus alarm.`,
+            `If the question says “troubleshoot why connections are rejected”, think VPC Flow Logs.`
+          ],
+          services: ['Amazon CloudWatch', 'CloudWatch Logs', 'CloudWatch Logs Insights', 'AWS CloudTrail', 'CloudTrail Lake', 'AWS Config', 'AWS Systems Manager', 'Session Manager', 'Patch Manager', 'Run Command', 'VPC Flow Logs']
         }
       ]
     },
@@ -644,6 +741,170 @@ window.TRACKS.saa = {
             'If the question says “zero downtime, users served from multiple Regions”, think multi-site active/active.'
           ],
           services: ['AWS Backup', 'AWS Elastic Disaster Recovery', 'Amazon Route 53', 'AWS CloudFormation', 'Amazon S3 Replication', 'Aurora Global Database']
+        },
+        {
+          id: 'orchestration-batch',
+          title: 'Orchestration, Batch & Lambda Patterns',
+          minutes: 14,
+          summary: 'Step Functions Standard vs Express, AWS Batch, EventBridge Scheduler, and the Lambda concurrency, invocation and failure-handling patterns that keep serverless systems resilient.',
+          sections: [
+            {
+              heading: 'AWS Step Functions: Standard vs Express',
+              html: `<p>Step Functions orchestrates a workflow as a <strong>state machine</strong>: tasks, choices, waits, parallel branches and maps, with built-in retries and error handling. It replaces fragile “Lambda calls Lambda” chains and custom state tracking.</p>
+<table>
+<thead><tr><th></th><th>Standard workflows</th><th>Express workflows</th></tr></thead>
+<tbody>
+<tr><td>Maximum duration</td><td>Up to <strong>1 year</strong></td><td>Up to <strong>5 minutes</strong></td></tr>
+<tr><td>Execution semantics</td><td>Exactly-once workflow execution</td><td>At-least-once (asynchronous) or at-most-once (synchronous)</td></tr>
+<tr><td>Pricing</td><td>Per state transition</td><td>Per request and duration (much cheaper at high volume)</td></tr>
+<tr><td>History</td><td>Full visual execution history retained</td><td>Sent to CloudWatch Logs</td></tr>
+<tr><td>Best for</td><td>Long-running, auditable business processes, human approvals, non-idempotent steps</td><td>High-volume, short event processing: IoT ingestion, streaming transforms, API back ends</td></tr>
+</tbody>
+</table>`
+            },
+            {
+              heading: 'Step Functions patterns',
+              html: `<ul>
+<li><strong>Service integrations</strong>: call Lambda, ECS/Fargate tasks, AWS Batch jobs, Glue jobs, DynamoDB, SNS, SQS, SageMaker AI, Bedrock and most AWS APIs directly, often with no Lambda glue code.</li>
+<li><strong>Run a job (.sync)</strong>: start an ECS task, Batch job or Glue job and wait for it to finish before moving on.</li>
+<li><strong>Callback with task token (.waitForTaskToken)</strong>: pause until an external system or a human calls back, for example a manager approving a refund by email link.</li>
+<li><strong>Retry and Catch</strong>: per-state retries with exponential backoff, and fallback states for errors, so failures are handled declaratively.</li>
+<li><strong>Parallel</strong> and <strong>Map</strong> states fan out work; <strong>Distributed Map</strong> processes millions of S3 objects or records in parallel.</li>
+</ul>
+<div class="callout">“Coordinate multiple Lambda functions and services, with retries, branching and visual tracking, with the LEAST operational overhead” → Step Functions.</div>`
+            },
+            {
+              heading: 'AWS Batch and EventBridge Scheduler',
+              html: `<p><strong>AWS Batch</strong> runs containerized batch jobs at any scale. You submit jobs to a <strong>job queue</strong>; Batch provisions the right compute in a <strong>compute environment</strong> (EC2 On-Demand, <strong>EC2 Spot</strong>, Fargate, or EKS), runs the jobs, and scales back to zero. It supports array jobs, job dependencies and multi-node parallel jobs. There is no extra charge for Batch itself, and there is no 15-minute limit.</p>
+<p><strong>EventBridge Scheduler</strong> is a serverless scheduler for <strong>one-time and recurring</strong> (cron or rate) invocations with time zone support, flexible time windows, retries and dead-letter queues. It scales to very large numbers of schedules and can call many AWS APIs directly. It is the modern replacement for scheduled EventBridge rules and for cron on an EC2 instance.</p>
+<table>
+<thead><tr><th>Job shape</th><th>Good fit</th></tr></thead>
+<tbody>
+<tr><td>Short, event-driven, under 15 minutes</td><td>Lambda</td></tr>
+<tr><td>Multi-step with branching, waits or approvals</td><td>Step Functions orchestrating Lambda/ECS/Batch</td></tr>
+<tr><td>Long-running container task, one at a time</td><td>ECS task on Fargate</td></tr>
+<tr><td>Thousands of queued compute-heavy jobs, Spot-friendly</td><td>AWS Batch</td></tr>
+<tr><td>Run something at a specific time or on a schedule</td><td>EventBridge Scheduler triggering any of the above</td></tr>
+</tbody>
+</table>`
+            },
+            {
+              heading: 'Lambda concurrency and cold starts',
+              html: `<p>Concurrency is the number of requests a function serves at the same time, roughly <em>requests per second × average duration in seconds</em>. All functions in a Region share the account concurrency quota (1,000 by default, raisable). When concurrency is exhausted, synchronous calls are <strong>throttled</strong> (429 errors).</p>
+<table>
+<thead><tr><th>Feature</th><th>What it does</th><th>Cost</th><th>Use when</th></tr></thead>
+<tbody>
+<tr><td><strong>Reserved concurrency</strong></td><td>Guarantees a slice of the pool for one function <em>and</em> caps it at that number (0 = function disabled)</td><td>No extra charge</td><td>Protect a critical function from noisy neighbors, or limit load on a fragile downstream database</td></tr>
+<tr><td><strong>Provisioned concurrency</strong></td><td>Keeps a number of execution environments initialized and ready on a version or alias; can be scaled on a schedule</td><td>Charged while configured</td><td>Latency-sensitive APIs that cannot tolerate cold starts</td></tr>
+<tr><td><strong>SnapStart</strong></td><td>Snapshots an initialized environment when you publish a version and resumes from it, cutting cold-start time</td><td>No extra charge for Java; caching and restore charges for Python and .NET</td><td>Java, Python or .NET functions with slow initialization; cannot be combined with provisioned concurrency</td></tr>
+</tbody>
+</table>`
+            },
+            {
+              heading: 'Invocation models, retries and destinations',
+              html: `<ul>
+<li><strong>Synchronous</strong> (API Gateway, ALB, SDK RequestResponse): the caller waits and handles errors itself.</li>
+<li><strong>Asynchronous</strong> (S3 events, SNS, EventBridge): Lambda queues the event and <strong>retries twice</strong> on error. Configure <strong>destinations</strong> to send the result of each invocation <em>on success</em> or <em>on failure</em> to SQS, SNS, another Lambda function or an EventBridge bus. Destinations include the error and payload context, and are preferred over a function-level dead-letter queue (which captures failures only).</li>
+<li><strong>Event source mappings</strong> (SQS, Kinesis, DynamoDB Streams, MSK): Lambda polls the source. For SQS, put a DLQ on the queue and report <strong>partial batch failures</strong>. For streams, a failed batch blocks its shard until it succeeds or expires, so set maximum retry attempts, <strong>bisect batch on error</strong>, and an on-failure destination.</li>
+</ul>
+<div class="callout warn">Trap: Lambda destinations apply to <strong>asynchronous</strong> invocations (and stream on-failure handling). A function called synchronously by API Gateway returns its error to the caller instead.</div>`
+            },
+            {
+              heading: 'Worked scenario',
+              html: `<p>An insurance company processes claims: validate the document, run fraud scoring, wait for an adjuster to approve claims over 10,000 USD (which can take days), then pay out. It also re-scores its entire claims history every night. Design: a <strong>Step Functions Standard</strong> workflow with Lambda tasks, a <strong>.waitForTaskToken</strong> step for adjuster approval and Retry/Catch on the payment step; the nightly re-scoring runs as an <strong>AWS Batch</strong> array job on Spot, started by <strong>EventBridge Scheduler</strong>. The claim-intake Lambda behind API Gateway uses <strong>provisioned concurrency</strong> during business hours, and the notification Lambda sends failures to an SQS <strong>on-failure destination</strong> for review.</p>`
+            }
+          ],
+          keyPoints: [
+            `Step Functions Standard: up to 1 year, exactly-once, auditable; Express: up to 5 minutes, high volume, cheaper.`,
+            `Use the task token callback pattern for human approvals and the .sync pattern to wait for ECS, Batch or Glue jobs.`,
+            `AWS Batch queues and runs containerized jobs on EC2, Spot, Fargate or EKS with no 15-minute limit.`,
+            `EventBridge Scheduler handles one-time and recurring schedules with time zones, retries and DLQs.`,
+            `Reserved concurrency guarantees and caps a function; provisioned concurrency pre-warms environments; SnapStart speeds Java, Python and .NET cold starts.`,
+            `Asynchronous Lambda invocations retry twice; send outcomes to on-success or on-failure destinations.`
+          ],
+          examTips: [
+            `If the question says “orchestrate several Lambda functions with error handling and a manual approval step”, think Step Functions Standard with a task token.`,
+            `If the question says “high-volume, short-lived workflows, lowest cost”, think Step Functions Express.`,
+            `If the question says “thousands of batch jobs, containers, Spot, minimal management”, think AWS Batch.`,
+            `If the question says “a Lambda function overwhelms the database” or “must always have capacity”, think reserved concurrency.`,
+            `If the question says “capture failed asynchronous invocations with details”, think Lambda on-failure destination.`
+          ],
+          services: ['AWS Step Functions', 'AWS Batch', 'Amazon EventBridge Scheduler', 'AWS Lambda', 'Lambda SnapStart', 'Amazon SQS', 'AWS Fargate']
+        },
+        {
+          id: 'api-frontend-integration',
+          title: 'APIs, Front End & Messaging Integration',
+          minutes: 13,
+          summary: 'API Gateway REST vs HTTP vs WebSocket APIs, throttling, caching and usage plans, AppSync for GraphQL, Amplify for full-stack web and mobile apps, and when to use SES vs SNS.',
+          sections: [
+            {
+              heading: 'API Gateway: REST vs HTTP vs WebSocket',
+              html: `<table>
+<thead><tr><th></th><th>REST API</th><th>HTTP API</th><th>WebSocket API</th></tr></thead>
+<tbody>
+<tr><td>Positioning</td><td>Most features</td><td>Lower cost and latency, simpler</td><td>Persistent two-way connections</td></tr>
+<tr><td>Auth</td><td>IAM, Cognito user pool authorizer, Lambda authorizer, API keys</td><td>IAM, <strong>native JWT authorizers</strong> (Cognito or any OIDC/OAuth 2.0 issuer), Lambda authorizer</td><td>IAM, Lambda authorizer on connect</td></tr>
+<tr><td>Caching</td><td><strong>Yes</strong></td><td>No</td><td>No</td></tr>
+<tr><td>Usage plans and API keys</td><td><strong>Yes</strong></td><td>No</td><td>No</td></tr>
+<tr><td>AWS WAF</td><td><strong>Yes</strong></td><td>No</td><td>No</td></tr>
+<tr><td>Request validation and transformation</td><td>Yes (models, mapping templates)</td><td>Limited (parameter mapping)</td><td>Route selection on message content</td></tr>
+<tr><td>Endpoint types</td><td>Edge-optimized, Regional, <strong>private</strong></td><td>Regional</td><td>Regional</td></tr>
+<tr><td>Typical use</td><td>Public APIs sold to partners, enterprise APIs needing WAF and caching</td><td>Lambda or HTTP proxies, internal microservices</td><td>Chat, live dashboards, multiplayer game state</td></tr>
+</tbody>
+</table>
+<p>WebSocket APIs route messages to integrations by a route key (<code>$connect</code>, <code>$disconnect</code>, <code>$default</code> or custom routes), and the back end pushes messages to clients through the <code>@connections</code> management API.</p>`
+            },
+            {
+              heading: 'Throttling, usage plans and caching',
+              html: `<ul>
+<li><strong>Throttling</strong> uses a token bucket. By default an account gets 10,000 requests per second steady state with a burst of 5,000 per Region, shared across its APIs. You can set lower limits per stage and per method. Excess requests receive <strong>429 Too Many Requests</strong>, protecting the back end.</li>
+<li><strong>Usage plans</strong> (REST APIs) attach <strong>API keys</strong> to per-client throttling limits and daily, weekly or monthly <strong>quotas</strong>, which is how you meter tiers such as free vs premium customers. API keys identify clients; they are not a strong authorization mechanism on their own.</li>
+<li><strong>Caching</strong> (REST APIs): a per-stage cache with a default TTL of 300 seconds (configurable up to 3,600 seconds) returns repeated responses without calling the back end, lowering latency and Lambda or database load.</li>
+<li><strong>Private APIs</strong> are reachable only from VPCs through an <code>execute-api</code> interface VPC endpoint, controlled by a resource policy. <strong>VPC links</strong> let public APIs reach private back ends behind an NLB or ALB.</li>
+<li>Integration requests time out after 29 seconds by default; longer work should be made asynchronous (accept, queue in SQS or start a Step Functions execution, return a job ID).</li>
+</ul>`
+            },
+            {
+              heading: 'AWS AppSync and AWS Amplify',
+              html: `<p><strong>AWS AppSync</strong> is a managed <strong>GraphQL</strong> service. Clients ask for exactly the fields they need in one request; resolvers fetch from DynamoDB, Lambda, Aurora, OpenSearch, HTTP endpoints and more. <strong>Subscriptions</strong> push real-time updates to clients over WebSockets, and caching, fine-grained auth (API key, IAM, Cognito, OIDC, Lambda) and WAF are built in. <strong>AppSync Events</strong> offers simple serverless WebSocket pub/sub channels without GraphQL.</p>
+<p><strong>AWS Amplify</strong> helps front-end and mobile developers build full-stack apps fast. <strong>Amplify Hosting</strong> provides Git-based CI/CD and global hosting for static and server-side rendered web apps (React, Next.js, Vue, Angular) with preview branches and custom domains. Amplify's backend tooling provisions Cognito authentication, AppSync/DynamoDB data and S3 storage from code, and its client libraries connect the app to them.</p>
+<div class="callout">“GraphQL API with real-time updates and offline-capable mobile clients” → AppSync. “Front-end team wants to deploy a React or Next.js site with CI/CD from Git and minimal AWS knowledge” → Amplify Hosting.</div>`
+            },
+            {
+              heading: 'Amazon SES vs Amazon SNS',
+              html: `<table>
+<thead><tr><th></th><th>Amazon SES</th><th>Amazon SNS</th></tr></thead>
+<tbody>
+<tr><td>Purpose</td><td><strong>Email service</strong>: transactional and marketing email at scale, and inbound email receiving</td><td><strong>Pub/sub messaging</strong>: fan out notifications to subscribers</td></tr>
+<tr><td>Recipients</td><td>Any email address you send to (customers)</td><td>Subscribed endpoints: SQS, Lambda, HTTP(S), Firehose, plus SMS, mobile push and email subscriptions that must be confirmed</td></tr>
+<tr><td>Content</td><td>Rich HTML templates, attachments, personalization</td><td>Short notification messages</td></tr>
+<tr><td>Deliverability</td><td>DKIM, SPF, DMARC, dedicated IPs, bounce and complaint tracking, configuration sets</td><td>Not designed for deliverability management</td></tr>
+<tr><td>Typical use</td><td>Order confirmations, password resets, newsletters</td><td>Ops alerts to an on-call team, CloudWatch alarm notifications, application fan-out</td></tr>
+</tbody>
+</table>
+<p>New SES accounts start in the <strong>sandbox</strong> (send only to verified identities with low quotas) until you request production access. SES can also <strong>receive</strong> email and use receipt rules to store messages in S3 or trigger Lambda. For SMS, voice and push at scale, AWS End User Messaging (formerly Amazon Pinpoint SMS and voice) is the current service; Pinpoint's campaign features are being retired.</p>`
+            },
+            {
+              heading: 'Worked scenario',
+              html: `<p>A fintech offers a public market-data API to partners on free and premium tiers, plus a web dashboard with live prices. Design: an API Gateway <strong>REST API</strong> with <strong>usage plans and API keys</strong> enforcing per-tier throttling and monthly quotas, <strong>caching</strong> of quote responses for 5 seconds to shield the back end, and AWS WAF attached. Internal microservices talk through cheaper <strong>HTTP APIs</strong> with JWT authorizers. The dashboard, built in Next.js and deployed with <strong>Amplify Hosting</strong>, receives live prices through <strong>AppSync subscriptions</strong>. Account statements are emailed with <strong>SES</strong>, while operations alerts go to an <strong>SNS</strong> topic subscribed by the on-call team.</p>`
+            }
+          ],
+          keyPoints: [
+            `REST APIs have the most features: caching, usage plans, API keys, WAF, request validation, private endpoints.`,
+            `HTTP APIs are cheaper and faster with native JWT authorizers but no caching, usage plans or WAF.`,
+            `WebSocket APIs keep persistent connections for real-time two-way messaging.`,
+            `Throttling returns 429s to protect back ends; usage plans set per-client limits and quotas.`,
+            `AppSync = managed GraphQL with real-time subscriptions; Amplify = full-stack app tooling and Git-based hosting.`,
+            `SES sends and receives email to customers; SNS fans out notifications to subscribers.`
+          ],
+          examTips: [
+            `If the question says “meter and throttle API usage per customer with API keys”, think REST API usage plans.`,
+            `If the question says “lowest cost API in front of Lambda with OIDC/JWT authorization”, think HTTP API.`,
+            `If the question says “reduce back-end calls for repeated identical API requests”, think API Gateway caching (REST).`,
+            `If the question says “GraphQL” or “real-time data sync to web and mobile clients”, think AppSync.`,
+            `If the question says “send transactional or marketing email to customers”, think SES, not SNS.`
+          ],
+          services: ['Amazon API Gateway', 'AWS AppSync', 'AWS Amplify', 'Amazon SES', 'Amazon SNS', 'AWS End User Messaging', 'Amazon Cognito']
         }
       ]
     },
@@ -744,7 +1005,7 @@ window.TRACKS.saa = {
               heading: 'Amazon CloudFront',
               html: `<p>CloudFront is a CDN with hundreds of edge locations. It caches static content near users and also accelerates <strong>dynamic</strong> content by keeping persistent connections to the origin over the AWS backbone.</p>
 <ul>
-<li><strong>Origins</strong>: S3 buckets, ALBs, EC2, API Gateway, MediaStore, any HTTP server. <strong>Origin groups</strong> provide origin failover.</li>
+<li><strong>Origins</strong>: S3 buckets, ALBs, EC2, API Gateway, Lambda function URLs, any HTTP server. <strong>Origin groups</strong> provide origin failover.</li>
 <li><strong>Origin Access Control (OAC)</strong>: the bucket stays private and only the CloudFront distribution can read it (OAC replaces the legacy Origin Access Identity).</li>
 <li><strong>Signed URLs / signed cookies</strong>: restrict access to premium content (signed URL for one file, cookies for many).</li>
 <li><strong>Cache behaviors and policies</strong>: different TTLs per path; control which headers, cookies and query strings are part of the cache key (fewer = higher hit ratio).</li>
@@ -775,7 +1036,7 @@ window.TRACKS.saa = {
 <tr><td>Data structures</td><td>Rich: strings, hashes, lists, sets, <strong>sorted sets</strong>, streams, geospatial</td><td>Simple key-value</td></tr>
 <tr><td>Replication / Multi-AZ failover</td><td>Yes</td><td>No</td></tr>
 <tr><td>Persistence / backups</td><td>Yes (snapshots)</td><td>No</td></tr>
-<tr><td>Threading</td><td>Mostly single-threaded per shard; scale with cluster mode sharding</td><td>Multi-threaded</td></tr>
+<tr><td>Threading</td><td>Command execution is single-threaded per shard (with multi-threaded I/O in newer engines); scale out with cluster mode sharding</td><td>Multi-threaded</td></tr>
 <tr><td>Use for</td><td>Leaderboards, sessions, pub/sub, anything needing HA</td><td>Simple, horizontally scaled cache where losing data is fine</td></tr>
 </tbody>
 </table>
@@ -854,7 +1115,7 @@ window.TRACKS.saa = {
 <tr><td>Amazon EKS</td><td>Managed Kubernetes control plane</td><td>You already use Kubernetes or need portability / the Kubernetes ecosystem</td></tr>
 <tr><td>AWS Fargate</td><td>Serverless compute engine for ECS and EKS</td><td>No EC2 instances to patch or scale; pay per task vCPU and memory</td></tr>
 <tr><td>EC2 launch type / node groups</td><td>Containers on instances you manage</td><td>Need GPUs, special instance types, or maximum cost control at scale</td></tr>
-<tr><td>AWS App Runner</td><td>Fully managed web apps from source or image</td><td>Simplest path for a containerized web service or API</td></tr>
+<tr><td>AWS App Runner</td><td>Fully managed web apps from source or image</td><td>Simplest path for a containerized web service or API (closed to new customers since April 30, 2026; AWS recommends Amazon ECS Express Mode for new apps)</td></tr>
 </tbody>
 </table>
 <p>Images live in <strong>Amazon ECR</strong>. In ECS, the <strong>task role</strong> grants permissions to the application, while the <strong>task execution role</strong> lets the agent pull images and write logs.</p>`
@@ -902,7 +1163,7 @@ window.TRACKS.saa = {
 <tr><td>In-memory, microsecond reads and durable</td><td>Amazon MemoryDB / ElastiCache</td></tr>
 <tr><td>Graph relationships (social networks, fraud rings)</td><td>Amazon Neptune</td></tr>
 <tr><td>Wide-column, Cassandra-compatible</td><td>Amazon Keyspaces</td></tr>
-<tr><td>Time series (IoT, metrics)</td><td>Amazon Timestream</td></tr>
+<tr><td>Time series (IoT, metrics)</td><td>Amazon Timestream (Timestream for InfluxDB; Timestream for LiveAnalytics is closed to new customers)</td></tr>
 <tr><td>Immutable, cryptographically verifiable ledger</td><td>Amazon QLDB was the classic answer but AWS has ended support for it; current guidance is Aurora PostgreSQL with audit features</td></tr>
 <tr><td>Data warehouse, OLAP analytics on structured data</td><td>Amazon Redshift</td></tr>
 </tbody>
@@ -919,7 +1180,7 @@ window.TRACKS.saa = {
 <tr><td>AWS Glue</td><td>Serverless ETL plus the <strong>Data Catalog</strong>; crawlers infer schemas</td><td>Transform data, catalog a data lake for Athena/Redshift/EMR</td></tr>
 <tr><td>Amazon EMR</td><td>Managed Hadoop, Spark, Hive, Presto clusters (or EMR Serverless)</td><td>Big data processing with open-source frameworks</td></tr>
 <tr><td>Amazon OpenSearch Service</td><td>Search and log analytics</td><td>Full-text search, log dashboards</td></tr>
-<tr><td>Amazon QuickSight</td><td>Serverless BI dashboards</td><td>Visualize data for business users</td></tr>
+<tr><td>Amazon QuickSight (now Amazon Quick Sight, the BI capability of Amazon Quick)</td><td>Serverless BI dashboards</td><td>Visualize data for business users</td></tr>
 <tr><td>AWS Lake Formation</td><td>Build and govern a data lake with fine-grained permissions</td><td>Column/row-level access control on S3 data lakes</td></tr>
 <tr><td>Amazon Managed Service for Apache Flink</td><td>Real-time stream processing</td><td>SQL/Java analytics on Kinesis or Kafka streams</td></tr>
 <tr><td>Amazon MSK</td><td>Managed Apache Kafka</td><td>Existing Kafka workloads</td></tr>
@@ -946,6 +1207,232 @@ window.TRACKS.saa = {
             'If the question says “existing MongoDB workload”, think DocumentDB.'
           ],
           services: ['Amazon RDS', 'Amazon Aurora', 'Amazon DynamoDB', 'Amazon DocumentDB', 'Amazon Neptune', 'Amazon Keyspaces', 'Amazon Timestream', 'Amazon MemoryDB', 'Amazon Redshift', 'Amazon Athena', 'AWS Glue', 'Amazon EMR', 'Amazon OpenSearch Service', 'Amazon QuickSight', 'AWS Lake Formation', 'Amazon MSK']
+        },
+        {
+          id: 'analytics-ingestion',
+          title: 'Data Lakes, Analytics & Streaming Ingestion',
+          minutes: 15,
+          summary: 'Build an S3 data lake with Glue and Lake Formation, choose between Athena, Redshift and EMR, ingest streams with Kinesis Data Streams, Amazon Data Firehose or MSK, and serve search and dashboards with OpenSearch and QuickSight.',
+          sections: [
+            {
+              heading: 'The S3 data lake: Glue and Lake Formation',
+              html: `<p>The standard AWS analytics design stores raw and curated data in <strong>Amazon S3</strong> and layers services on top. Storage and compute scale independently, and many engines can read the same data.</p>
+<ul>
+<li><strong>AWS Glue Data Catalog</strong>: the central, Hive-compatible metadata store (databases, tables, schemas, partitions) used by Athena, Redshift Spectrum, EMR and Lake Formation.</li>
+<li><strong>Glue crawlers</strong> scan S3 (and JDBC sources), infer schemas and create or update catalog tables and partitions on a schedule.</li>
+<li><strong>Glue ETL jobs</strong>: serverless Apache Spark or Python jobs, built in code or visually in Glue Studio, to clean, join and convert data (for example JSON to partitioned Parquet). <strong>Job bookmarks</strong> process only new data on each run. Glue also supports streaming ETL and data quality rules.</li>
+<li><strong>AWS Glue DataBrew</strong>: no-code visual data preparation for analysts.</li>
+<li><strong>AWS Lake Formation</strong>: builds on the Glue Data Catalog to centrally govern the lake with <strong>database, table, column, row and cell-level permissions</strong>, tag-based access control (LF-Tags), and cross-account sharing, instead of managing complex S3 bucket policies per team.</li>
+</ul>
+<div class="callout">“Analysts in different departments may see only certain columns (for example, no PII) of the same data lake tables” → Lake Formation fine-grained permissions.</div>`
+            },
+            {
+              heading: 'Query and processing engines: Athena vs Redshift vs EMR',
+              html: `<table>
+<thead><tr><th></th><th>Amazon Athena</th><th>Amazon Redshift</th><th>Amazon EMR</th></tr></thead>
+<tbody>
+<tr><td>What it is</td><td>Serverless interactive SQL directly on S3</td><td>Columnar MPP data warehouse (provisioned RA3 or Serverless)</td><td>Managed big data frameworks: Spark, Hive, Presto/Trino, HBase, Flink</td></tr>
+<tr><td>Pricing</td><td>Per TB of data scanned (or provisioned capacity)</td><td>Per node-hour, or per RPU-hour for Serverless</td><td>EC2 instances plus EMR fee, or per use with EMR Serverless</td></tr>
+<tr><td>Best for</td><td><strong>Ad-hoc, occasional</strong> queries, log analysis, no infrastructure</td><td><strong>Frequent, complex BI</strong> and joins over large structured data with many concurrent users</td><td>Custom large-scale processing with open-source tools, ML feature engineering, migrating Hadoop</td></tr>
+<tr><td>Notable features</td><td>Federated queries to other sources via connectors, workgroups with per-query data limits, CTAS to write Parquet</td><td>Redshift Spectrum queries S3, concurrency scaling, materialized views, data sharing, <strong>zero-ETL</strong> integrations from Aurora, RDS and DynamoDB</td><td>Deploy on EC2 (use <strong>Spot for task nodes</strong>), on EKS, or <strong>EMR Serverless</strong>; EMRFS reads and writes S3</td></tr>
+</tbody>
+</table>
+<p>For any S3-based engine, store data as <strong>columnar (Parquet/ORC), compressed and partitioned</strong> files to scan less data. Avoid millions of tiny files; compact them into larger objects.</p>`
+            },
+            {
+              heading: 'Streaming ingestion',
+              html: `<table>
+<thead><tr><th></th><th>Kinesis Data Streams</th><th>Amazon Data Firehose</th><th>Amazon MSK</th></tr></thead>
+<tbody>
+<tr><td>Model</td><td>Durable stream; you build or attach consumers</td><td>Fully managed <strong>delivery</strong> to destinations</td><td>Managed Apache Kafka (provisioned or Serverless)</td></tr>
+<tr><td>Latency</td><td>Real time (~hundreds of ms)</td><td>Near real time (buffers by size or time)</td><td>Real time</td></tr>
+<tr><td>Replay</td><td>Yes, retention 24 hours up to 365 days</td><td>No</td><td>Yes, configurable retention</td></tr>
+<tr><td>Capacity</td><td>On-demand or provisioned shards</td><td>Automatic</td><td>Brokers you size, or MSK Serverless</td></tr>
+<tr><td>Consumers / destinations</td><td>Lambda, KCL apps, Managed Service for Apache Flink, Firehose; <strong>enhanced fan-out</strong> gives each consumer dedicated throughput</td><td>S3, Redshift, OpenSearch, Splunk, Snowflake, Apache Iceberg tables, HTTP endpoints; optional Lambda transform and Parquet/ORC conversion</td><td>Kafka clients, MSK Connect connectors, Lambda, Flink, Firehose</td></tr>
+<tr><td>Choose when</td><td>Custom real-time processing, multiple consumers, replay</td><td>“Load streaming data into S3/Redshift/OpenSearch with no code”</td><td>Existing Kafka applications or Kafka ecosystem tools</td></tr>
+</tbody>
+</table>
+<p><strong>Amazon Managed Service for Apache Flink</strong> runs real-time analytics (windowed aggregations, anomaly detection) over Kinesis or Kafka streams. Firehose can read from a Kinesis data stream or MSK topic, so “stream for real-time processing, plus archive to S3” is often KDS → Firehose → S3.</p>`
+            },
+            {
+              heading: 'Search and dashboards: OpenSearch and QuickSight',
+              html: `<p><strong>Amazon OpenSearch Service</strong> (successor to Amazon Elasticsearch Service) provides <strong>full-text search</strong>, log and observability analytics, and vector search, with OpenSearch Dashboards for visualization. Choose managed domains (with UltraWarm and cold storage tiers for older data) or <strong>OpenSearch Serverless</strong>. Data arrives through Firehose, OpenSearch Ingestion pipelines, CloudWatch Logs subscriptions, or <strong>zero-ETL integration from DynamoDB</strong>.</p>
+<p><strong>Amazon QuickSight</strong> (now Amazon Quick Sight, the BI capability of Amazon Quick, formerly Quick Suite; exam questions still say QuickSight) is serverless BI: interactive dashboards for business users over Athena, Redshift, RDS, S3 and SaaS sources, with the in-memory <strong>SPICE</strong> engine, row-level security, embedding in applications and natural-language questions.</p>
+<div class="callout warn">Trap: DynamoDB is not a search engine. “Search product descriptions by keyword with relevance ranking” points to OpenSearch, often fed from DynamoDB.</div>`
+            },
+            {
+              heading: 'Worked scenario',
+              html: `<p>A ride-sharing company streams GPS events from millions of phones. Requirements: real-time surge-pricing calculations, raw data archived for data science, governed access so analysts never see rider names, and executive dashboards. Design: events go into <strong>Kinesis Data Streams</strong> (on-demand); <strong>Managed Service for Apache Flink</strong> computes surge pricing in real time; <strong>Firehose</strong> reads the same stream and writes partitioned Parquet to S3. A <strong>Glue crawler</strong> catalogs the data, <strong>Lake Formation</strong> hides PII columns from the analyst role, analysts explore with <strong>Athena</strong>, nightly Spark feature jobs run on <strong>EMR Serverless</strong>, and curated aggregates load into <strong>Redshift Serverless</strong> behind <strong>QuickSight</strong> dashboards.</p>`
+            }
+          ],
+          keyPoints: [
+            `S3 is the data lake; the Glue Data Catalog is its shared metadata layer; crawlers infer schemas; Glue jobs do serverless ETL.`,
+            `Lake Formation adds column, row and cell-level permissions and cross-account sharing on top of the catalog.`,
+            `Athena = serverless ad-hoc SQL on S3 (pay per scan); Redshift = data warehouse for frequent complex BI; EMR = open-source big data frameworks.`,
+            `Kinesis Data Streams: real time, replay, multiple consumers. Firehose: no-code delivery to S3/Redshift/OpenSearch, no replay. MSK: managed Kafka.`,
+            `OpenSearch for full-text search and log analytics; QuickSight for BI dashboards.`,
+            `Columnar, compressed, partitioned data reduces cost and speeds every S3 query engine.`
+          ],
+          examTips: [
+            `If the question says “discover schema of data in S3 and make it queryable”, think Glue crawler plus Data Catalog, then Athena.`,
+            `If the question says “fine-grained, column-level access to a data lake across accounts”, think Lake Formation.`,
+            `If the question says “near-real-time delivery of streaming data to S3 with format conversion, no code”, think Amazon Data Firehose.`,
+            `If the question says “existing Kafka producers and consumers”, think Amazon MSK.`,
+            `If the question says “run Spark jobs without managing clusters”, think EMR Serverless or Glue.`
+          ],
+          services: ['Amazon S3', 'AWS Glue', 'AWS Glue Data Catalog', 'AWS Glue DataBrew', 'AWS Lake Formation', 'Amazon Athena', 'Amazon Redshift', 'Amazon EMR', 'Amazon Kinesis Data Streams', 'Amazon Data Firehose', 'Amazon MSK', 'Amazon Managed Service for Apache Flink', 'Amazon OpenSearch Service', 'Amazon QuickSight']
+        },
+        {
+          id: 'ai-ml-services',
+          title: 'AI/ML Managed Services',
+          minutes: 12,
+          summary: 'Pick the right pre-trained AI service for images, text, speech, documents, chatbots and search, and know where SageMaker AI and Amazon Bedrock fit at the level the exam expects.',
+          sections: [
+            {
+              heading: 'Match the input to the service',
+              html: `<p>The Associate exam does not test model building. It tests whether you can recognize the <strong>managed AI service</strong> that solves a problem with an API call, which is almost always the LEAST operational overhead answer.</p>
+<table>
+<thead><tr><th>Need</th><th>Service</th></tr></thead>
+<tbody>
+<tr><td>Detect objects, scenes, faces, unsafe content, text or PPE in <strong>images and video</strong>; face comparison</td><td><strong>Amazon Rekognition</strong></td></tr>
+<tr><td>Extract <strong>printed or handwritten text, forms (key-value pairs) and tables</strong> from scanned documents, invoices, IDs</td><td><strong>Amazon Textract</strong></td></tr>
+<tr><td>Understand <strong>text</strong>: sentiment, entities, key phrases, language, topics, <strong>PII detection</strong>, custom classification</td><td><strong>Amazon Comprehend</strong> (Comprehend Medical for clinical text)</td></tr>
+<tr><td><strong>Speech to text</strong>: transcripts, speaker identification, PII redaction, custom vocabularies, call analytics</td><td><strong>Amazon Transcribe</strong></td></tr>
+<tr><td><strong>Text to speech</strong>: lifelike voices, SSML, custom lexicons</td><td><strong>Amazon Polly</strong></td></tr>
+<tr><td><strong>Translate</strong> text between languages, with custom terminology</td><td><strong>Amazon Translate</strong></td></tr>
+<tr><td><strong>Chatbots and voice bots</strong> with intents and slots (the technology behind Alexa); integrates with Amazon Connect</td><td><strong>Amazon Lex</strong></td></tr>
+<tr><td><strong>Intelligent enterprise search</strong>: natural-language questions over documents in S3, SharePoint, Confluence and other repositories</td><td><strong>Amazon Kendra</strong></td></tr>
+<tr><td>Personalized <strong>recommendations</strong></td><td>Amazon Personalize</td></tr>
+</tbody>
+</table>`
+            },
+            {
+              heading: 'Combining AI services in pipelines',
+              html: `<p>Real solutions chain services together, usually triggered by S3 events, Lambda or Step Functions:</p>
+<ul>
+<li><strong>Call center analytics</strong>: recordings land in S3 → <strong>Transcribe</strong> produces transcripts → <strong>Comprehend</strong> scores sentiment and extracts entities → results in S3 queried by Athena and shown in QuickSight.</li>
+<li><strong>Document processing</strong>: scanned forms → <strong>Textract</strong> extracts fields and tables → <strong>Comprehend</strong> detects PII → data stored in DynamoDB; low-confidence results routed to human review.</li>
+<li><strong>Content moderation</strong>: user uploads → <strong>Rekognition</strong> moderation labels → flagged images quarantined.</li>
+<li><strong>Multilingual voice</strong>: <strong>Translate</strong> text, then <strong>Polly</strong> speaks it; <strong>Lex</strong> provides the conversational front end.</li>
+</ul>
+<div class="callout warn">Trap: Textract reads documents (it understands forms and tables); Rekognition's text detection is for text in photos and video frames such as street signs. Comprehend analyzes text that already exists; it does not read images or audio.</div>`
+            },
+            {
+              heading: 'Amazon SageMaker AI at a high level',
+              html: `<p><strong>Amazon SageMaker AI</strong> (renamed from Amazon SageMaker in late 2024; the “SageMaker” name now also covers a broader unified data and AI platform) is the service for building, training and deploying <strong>your own</strong> machine learning models.</p>
+<ul>
+<li>Managed notebooks and Studio IDE, managed <strong>training jobs</strong> (including Spot training), automatic model tuning.</li>
+<li>Deployment options: <strong>real-time endpoints</strong>, <strong>serverless inference</strong> for intermittent traffic, <strong>asynchronous inference</strong> for large payloads, and <strong>batch transform</strong> for offline scoring.</li>
+<li><strong>SageMaker Canvas</strong> for no-code ML, <strong>JumpStart</strong> for pre-built models, <strong>Ground Truth</strong> for data labeling, Model Monitor and Clarify for drift and bias.</li>
+</ul>
+<p>Choose SageMaker AI when the problem needs a custom model trained on your data (for example, predicting equipment failure from sensor history) and no pre-trained AI service fits.</p>`
+            },
+            {
+              heading: 'Amazon Bedrock at a high level',
+              html: `<p><strong>Amazon Bedrock</strong> is a fully managed, serverless way to use <strong>foundation models</strong> (for example, Anthropic Claude, Amazon Nova, Meta Llama, Mistral) through one API, with no infrastructure to manage.</p>
+<ul>
+<li><strong>Knowledge Bases</strong>: managed retrieval-augmented generation (RAG) that grounds answers in your own documents (for example, from S3) using a vector store.</li>
+<li><strong>Agents</strong>: let models plan multi-step tasks and call your APIs; <strong>Guardrails</strong>: filter harmful content, block topics and redact PII.</li>
+<li><strong>Model customization</strong> (fine-tuning) with your data, plus on-demand, batch and provisioned throughput options.</li>
+<li><strong>Security</strong>: your prompts and data are not used to train the base models and are not shared with model providers; access is controlled with IAM, data is encrypted with KMS, and traffic can stay private with <strong>PrivateLink</strong> interface endpoints.</li>
+</ul>
+<table>
+<thead><tr><th>If the requirement is...</th><th>Choose</th></tr></thead>
+<tbody>
+<tr><td>A specific, common task (transcribe, translate, OCR, sentiment)</td><td>The purpose-built AI service</td></tr>
+<tr><td>Generative AI: chat assistants, summarization, content generation, answering questions over company documents</td><td>Amazon Bedrock (or Amazon Q Business for a ready-made workplace assistant)</td></tr>
+<tr><td>A custom predictive model trained on proprietary data</td><td>SageMaker AI</td></tr>
+</tbody>
+</table>`
+            },
+            {
+              heading: 'Worked scenario',
+              html: `<p>A travel company wants to: let customers book trips through a chatbot, read uploaded passport scans to pre-fill forms, publish hotel descriptions in 12 languages with audio versions, and give support staff a generative assistant that answers questions from internal policy documents. Design: <strong>Lex</strong> for the booking bot, <strong>Textract</strong> (AnalyzeID) for passports, <strong>Translate</strong> plus <strong>Polly</strong> for multilingual text and audio, and <strong>Bedrock</strong> with a <strong>Knowledge Base</strong> over policy documents in S3, accessed through a PrivateLink endpoint with Guardrails redacting PII. No custom models are trained, so SageMaker AI is not needed.</p>`
+            }
+          ],
+          keyPoints: [
+            `Rekognition = images and video; Textract = documents, forms and tables; Comprehend = text insights and PII; Transcribe = speech to text; Polly = text to speech; Translate = languages.`,
+            `Lex builds chatbots; Kendra provides natural-language enterprise search.`,
+            `Pre-trained AI services are the least-overhead answer when they fit the task.`,
+            `SageMaker AI is for building, training and hosting your own models.`,
+            `Bedrock gives serverless API access to foundation models, with Knowledge Bases for RAG, Agents and Guardrails; customer data is not used to train base models.`
+          ],
+          examTips: [
+            `If the question says “extract tables and form fields from scanned PDFs”, think Textract.`,
+            `If the question says “detect inappropriate images” or “identify faces”, think Rekognition.`,
+            `If the question says “sentiment of customer reviews” or “find PII in text”, think Comprehend.`,
+            `If the question says “transcribe call recordings, then analyze sentiment”, think Transcribe then Comprehend.`,
+            `If the question says “generative AI chatbot grounded in company documents with minimal infrastructure”, think Bedrock Knowledge Bases.`
+          ],
+          services: ['Amazon Rekognition', 'Amazon Textract', 'Amazon Comprehend', 'Amazon Transcribe', 'Amazon Polly', 'Amazon Translate', 'Amazon Lex', 'Amazon Kendra', 'Amazon Personalize', 'Amazon SageMaker AI', 'Amazon Bedrock']
+        },
+        {
+          id: 'edge-hybrid-compute',
+          title: 'Edge & Hybrid Compute and Hybrid DNS',
+          minutes: 12,
+          summary: 'Run AWS infrastructure closer to users or on premises with Outposts, Local Zones and Wavelength, and resolve names across AWS and data centers with Route 53 Resolver endpoints.',
+          sections: [
+            {
+              heading: 'Where can AWS compute run?',
+              html: `<table>
+<thead><tr><th></th><th>AWS Outposts</th><th>AWS Local Zones</th><th>AWS Wavelength</th></tr></thead>
+<tbody>
+<tr><td>Location</td><td><strong>Your</strong> data center or facility</td><td>AWS-run infrastructure in a <strong>metro area</strong>, close to population centers</td><td>Inside a <strong>telecom carrier's 5G network</strong></td></tr>
+<tr><td>Main reason</td><td>Low latency to on-premises systems, <strong>local data processing and data residency</strong>, consistent hybrid operations</td><td><strong>Single-digit millisecond latency</strong> to end users in a city without a nearby Region</td><td>Ultra-low latency for <strong>mobile and connected devices</strong> on 5G</td></tr>
+<tr><td>Form</td><td>42U racks or 1U/2U servers, installed and maintained by AWS</td><td>An extension of a parent Region; opt in, then create subnets there</td><td>Wavelength Zones; traffic exits through a <strong>carrier gateway</strong></td></tr>
+<tr><td>Services</td><td>EC2, EBS, S3 on Outposts, ECS, EKS, RDS on Outposts (racks), EMR and more</td><td>EC2, EBS, ECS, EKS, ALB, some database services, varying by zone</td><td>EC2, EBS, ECS, EKS (subset)</td></tr>
+<tr><td>Example</td><td>Factory floor control systems, hospital imaging, a bank that must keep data in its own building</td><td>Film studio artists in Los Angeles editing video, real-time gaming in a metro</td><td>AR/VR streaming, connected vehicles, live video analytics from phones</td></tr>
+</tbody>
+</table>
+<div class="callout">All three use the same AWS APIs, console and tools as the parent Region, so teams operate them the same way. Outposts still needs a reliable connection (a <em>service link</em>) back to its parent Region for management.</div>`
+            },
+            {
+              heading: 'Other hybrid building blocks',
+              html: `<ul>
+<li><strong>Amazon ECS Anywhere</strong> and <strong>Amazon EKS Anywhere / EKS Hybrid Nodes</strong>: run containers on your own servers with AWS-managed orchestration or tooling.</li>
+<li><strong>Systems Manager hybrid activations</strong>: patch and manage on-premises servers alongside EC2.</li>
+<li><strong>Storage Gateway</strong>: on-premises access to S3-backed file, volume and tape storage.</li>
+<li><strong>Snowball Edge</strong>: compute and storage in disconnected or rugged locations.</li>
+<li><strong>Dedicated Local Zones</strong>: Local Zone infrastructure dedicated to one customer or community for digital sovereignty.</li>
+</ul>
+<div class="callout warn">Trap: if users are spread worldwide and the goal is just faster web content, the answer is CloudFront, not Local Zones. Local Zones and Wavelength are for <strong>compute</strong> that must be physically close to a specific user population.</div>`
+            },
+            {
+              heading: 'Hybrid DNS with Route 53 Resolver',
+              html: `<p>Every VPC has the <strong>Route 53 Resolver</strong> (the “.2” address, VPC base + 2) that answers queries for public DNS, VPC resource names and <strong>private hosted zones</strong> associated with the VPC. On-premises DNS servers cannot reach it directly, and it does not know your corporate domains. Resolver endpoints bridge the two over Direct Connect or VPN:</p>
+<table>
+<thead><tr><th>Endpoint</th><th>Direction of queries</th><th>How it works</th><th>Example</th></tr></thead>
+<tbody>
+<tr><td><strong>Inbound endpoint</strong></td><td>On-premises → AWS</td><td>ENIs with IP addresses in your VPC subnets; on-premises DNS servers conditionally forward AWS domains to those IPs</td><td>Data center servers resolve <code>db.aws.internal.example.com</code> in a private hosted zone</td></tr>
+<tr><td><strong>Outbound endpoint</strong> + <strong>forwarding rules</strong></td><td>AWS → on-premises</td><td>Rules say “forward <code>corp.example.com</code> to these on-premises DNS server IPs” through the outbound endpoint ENIs</td><td>EC2 instances resolve <code>ldap.corp.example.com</code> hosted in the data center</td></tr>
+</tbody>
+</table>
+<ul>
+<li>Share forwarding rules with other accounts and VPCs through <strong>AWS RAM</strong>, so one set of endpoints in a shared networking VPC serves the organization.</li>
+<li>Place endpoint IPs in at least two AZs for availability, and allow DNS (TCP and UDP port 53) in security groups.</li>
+<li><strong>Route 53 Resolver DNS Firewall</strong> blocks queries to malicious domains; <strong>Resolver query logging</strong> records DNS queries from VPCs.</li>
+</ul>`
+            },
+            {
+              heading: 'Worked scenario',
+              html: `<p>A manufacturer has plants with robotic assembly lines that need sub-10 ms responses from a quality-inspection service, and a regulator requires plant sensor data to stay on site. Its sales app also serves a fast-growing customer base in a city far from the nearest Region. Design: <strong>Outposts racks</strong> in each plant run the inspection service on EC2 and store data in S3 on Outposts; the sales app's latency-sensitive tier runs in a <strong>Local Zone</strong> in that city. A Route 53 <strong>outbound endpoint with forwarding rules</strong> lets AWS workloads resolve plant hostnames, and an <strong>inbound endpoint</strong> lets plant systems resolve the private hosted zone for AWS services, all over Direct Connect.</p>`
+            }
+          ],
+          keyPoints: [
+            `Outposts = AWS infrastructure in your data center for low latency to on-premises systems and data residency.`,
+            `Local Zones = AWS infrastructure in metro areas for single-digit millisecond latency to nearby users.`,
+            `Wavelength = AWS compute inside 5G carrier networks for mobile and edge devices.`,
+            `Route 53 Resolver inbound endpoints let on-premises DNS resolve AWS private hosted zones.`,
+            `Outbound endpoints plus forwarding rules let VPCs resolve on-premises domains; share rules with RAM.`
+          ],
+          examTips: [
+            `If the question says “run AWS services on premises with the same APIs” or “data must remain in our facility”, think Outposts.`,
+            `If the question says “single-digit millisecond latency for users in a specific city”, think Local Zones.`,
+            `If the question says “5G mobile devices, ultra-low latency”, think Wavelength.`,
+            `If the question says “on-premises servers must resolve records in a private hosted zone”, think Route 53 Resolver inbound endpoint.`,
+            `If the question says “EC2 instances must resolve on-premises domain names”, think outbound endpoint with forwarding rules.`
+          ],
+          services: ['AWS Outposts', 'AWS Local Zones', 'AWS Wavelength', 'Amazon Route 53 Resolver', 'Route 53 private hosted zones', 'AWS RAM', 'Amazon ECS Anywhere', 'Amazon EKS Anywhere']
         }
       ]
     },
@@ -1051,7 +1538,7 @@ window.TRACKS.saa = {
 <li><strong>Versioning</strong> keeps every version of an object; a delete adds a delete marker instead of removing data. Once enabled it can only be suspended. Add <strong>MFA Delete</strong> to require MFA for permanent version deletion.</li>
 <li><strong>Replication</strong> (requires versioning on source and destination): <strong>Cross-Region Replication (CRR)</strong> for compliance, DR and lower latency; <strong>Same-Region Replication (SRR)</strong> for log aggregation or copies across accounts. Only new objects replicate by default; use <strong>S3 Batch Replication</strong> for existing ones. <strong>Replication Time Control</strong> offers an SLA (99.99% of objects within 15 minutes).</li>
 <li><strong>S3 Object Lock</strong> (WORM, requires versioning): <em>Governance mode</em> lets users with special permission override or delete; <em>Compliance mode</em> means nobody, including the root user, can delete or shorten retention until it expires. <strong>Legal hold</strong> prevents deletion indefinitely until removed.</li>
-<li><strong>S3 Glacier Vault Lock</strong> applies an immutable policy to Glacier vaults.</li>
+<li><strong>S3 Glacier Vault Lock</strong> applies an immutable policy to vaults in the original vault-based S3 Glacier service. That legacy service is no longer open to new customers; for new designs use the S3 Glacier storage classes with <strong>Object Lock</strong>.</li>
 </ul>`
             },
             {
@@ -1169,7 +1656,7 @@ window.TRACKS.saa = {
 <tr><td>AWS Direct Connect</td><td>Dedicated link</td><td>Ongoing large hybrid transfers with consistent performance</td></tr>
 </tbody>
 </table>
-<div class="callout">AWS has retired Snowmobile and the Snowcone device, and has narrowed Snow family availability over time. On the exam, Snowball Edge remains the standard “offline transfer” answer; in real projects check current availability and consider DataSync over Direct Connect.</div>`
+<div class="callout">AWS has retired Snowmobile and the Snowcone device, and has steadily narrowed Snow family availability (check whether your account can still order Snowball Edge devices). On the exam, Snowball Edge remains the standard “offline transfer” answer; in real projects check current availability and consider DataSync over Direct Connect.</div>`
             },
             {
               heading: 'Database migration: DMS and Schema Conversion',
@@ -1185,7 +1672,7 @@ window.TRACKS.saa = {
               heading: 'Server and application migration',
               html: `<ul>
 <li><strong>AWS Application Migration Service (MGN)</strong>: lift-and-shift servers with continuous block-level replication and a short cutover window; the recommended rehost tool.</li>
-<li><strong>AWS Migration Hub</strong>: track migrations across tools; <strong>Application Discovery Service</strong> collects on-prem server inventory and dependencies to plan.</li>
+<li><strong>AWS Migration Hub</strong>: track migrations across tools; <strong>Application Discovery Service</strong> collects on-prem server inventory and dependencies to plan. (Migration Hub closed to new customers in November 2025; AWS Transform is the suggested path for new projects)</li>
 <li><strong>VMware Cloud on AWS</strong> or importing VMs (VM Import/Export) for virtualization-centric estates.</li>
 <li>The <em>7 Rs</em>: retire, retain, rehost, relocate, repurchase, replatform, refactor. “Minimal changes, fastest” = rehost; “use managed DB but keep app” = replatform.</li>
 </ul>`
@@ -1263,13 +1750,47 @@ window.TRACKS.saa = {
     { domain: 'cost', front: `Compute Savings Plans vs EC2 Instance Savings Plans`, back: `<b>Compute SP</b>: up to 66%, any family, size, Region, OS, plus Fargate and Lambda. <b>EC2 Instance SP</b>: up to 72%, locked to one family in one Region.` },
     { domain: 'cost', front: `When are Dedicated Hosts required?`, back: `For <b>BYOL</b> software licensed per socket, per core or per VM, or compliance needing visibility of the physical host.` },
     { domain: 'cost', front: `S3 Intelligent-Tiering is best when...`, back: `Access patterns are <b>unknown or changing</b>. Small monitoring fee per object, no retrieval fees.` },
-    { domain: 'cost', front: `Minimum storage durations for S3 classes`, back: `Standard-IA / One Zone-IA: <b>30 days</b>. Glacier Instant & Flexible Retrieval: <b>90 days</b>. Deep Archive: <b>180 days</b>.` },
+    { domain: 'cost', front: `Minimum storage durations for S3 classes`, back: `Standard-IA / One Zone-IA: <b>30 days</b>. Glacier Instant &amp; Flexible Retrieval: <b>90 days</b>. Deep Archive: <b>180 days</b>.` },
     { domain: 'cost', front: `Glacier Deep Archive retrieval times`, back: `Standard within <b>12 hours</b>, Bulk within <b>48 hours</b>.` },
     { domain: 'cost', front: `Object Lock governance vs compliance mode`, back: `<b>Governance</b>: users with special permissions can override. <b>Compliance</b>: nobody, not even root, can delete or shorten retention.` },
     { domain: 'cost', front: `AWS Budgets vs Cost Explorer`, back: `<b>Budgets</b>: alerts (and actions) on actual or forecasted spend. <b>Cost Explorer</b>: analyze and visualize historical cost and forecast.` },
     { domain: 'cost', front: `Which data transfer is free?`, back: `Inbound from the internet, and traffic within the same AZ using private IPs. Cross-AZ, cross-Region and internet egress are charged.` },
     { domain: 'cost', front: `DataSync vs Snowball Edge`, back: `<b>DataSync</b>: online, scheduled transfers over the network. <b>Snowball Edge</b>: offline physical device for large data with limited bandwidth.` },
-    { domain: 'cost', front: `How does DMS keep downtime minimal?`, back: `Full load followed by <b>change data capture (CDC)</b> keeps the target in sync while the source stays live until cutover.` }
+    { domain: 'cost', front: `How does DMS keep downtime minimal?`, back: `Full load followed by <b>change data capture (CDC)</b> keeps the target in sync while the source stays live until cutover.` },
+    { domain: 'secure', front: `CloudWatch vs CloudTrail vs Config`, back: `<b>CloudWatch</b>: what is happening (metrics, logs, alarms). <b>CloudTrail</b>: who did what (API calls). <b>Config</b>: what changed and is it compliant (configuration history and rules).` },
+    { domain: 'secure', front: `CloudTrail management events vs data events`, back: `<b>Management</b>: control-plane calls (RunInstances, CreateBucket), logged by default with 90-day event history. <b>Data</b>: high-volume operations (S3 GetObject, Lambda Invoke, DynamoDB items), must be enabled explicitly and cost extra.` },
+    { domain: 'secure', front: `What is a CloudTrail organization trail?`, back: `A trail created in the management (or delegated admin) account that logs <b>every account</b> in the organization; member accounts cannot modify or delete it. Send it to a log archive account bucket.` },
+    { domain: 'secure', front: `How do you detect tampering with CloudTrail log files?`, back: `Enable <b>log file integrity validation</b>, which creates signed digest files you can validate.` },
+    { domain: 'secure', front: `How does AWS Config fix non-compliant resources?`, back: `<b>Remediation actions</b> run Systems Manager Automation runbooks, manually or automatically. Config itself does not prevent changes.` },
+    { domain: 'secure', front: `What is an AWS Config conformance pack?`, back: `A bundle of Config rules and remediation actions deployed as one unit, to an account or across an organization.` },
+    { domain: 'secure', front: `Session Manager benefits`, back: `Shell access to instances with <b>no SSH keys, no bastion host and no inbound ports</b>; IAM-controlled, sessions logged to S3/CloudWatch Logs and CloudTrail.` },
+    { domain: 'secure', front: `EC2 memory utilization is missing in CloudWatch. Why?`, back: `Memory and disk-space metrics are not collected by default. Install the <b>CloudWatch agent</b> to publish them.` },
+    { domain: 'secure', front: `What do VPC Flow Logs capture?`, back: `Metadata of IP traffic (addresses, ports, protocol, bytes, <b>ACCEPT/REJECT</b>) at VPC, subnet or ENI level, to CloudWatch Logs, S3 or Firehose. Not packet payloads (use Traffic Mirroring).` },
+    { domain: 'secure', front: `What does Lake Formation add to a data lake?`, back: `Central governance on the Glue Data Catalog: <b>column, row and cell-level permissions</b>, tag-based access control and cross-account sharing.` },
+    { domain: 'secure', front: `Is Amazon Bedrock customer data used to train the base models?`, back: `<b>No.</b> Prompts and data are not used to train base models or shared with model providers. Use IAM, KMS and PrivateLink to control access.` },
+    { domain: 'resilient', front: `Step Functions Standard vs Express`, back: `<b>Standard</b>: up to 1 year, exactly-once, priced per state transition, full history. <b>Express</b>: up to 5 minutes, high volume, at-least-once (async), priced per request and duration.` },
+    { domain: 'resilient', front: `How does Step Functions wait for a human approval?`, back: `The <b>callback pattern</b> (.waitForTaskToken): the workflow pauses until an external system returns the task token with SendTaskSuccess or SendTaskFailure.` },
+    { domain: 'resilient', front: `Reserved vs provisioned concurrency`, back: `<b>Reserved</b>: guarantees and caps a function's concurrency, no extra cost. <b>Provisioned</b>: keeps environments initialized to remove cold starts, charged while configured.` },
+    { domain: 'resilient', front: `What does Lambda SnapStart do?`, back: `Snapshots an initialized execution environment when a version is published and restores from it to cut cold starts. Supports Java, Python and .NET; not combinable with provisioned concurrency.` },
+    { domain: 'resilient', front: `Lambda asynchronous invocation retries and destinations`, back: `Lambda retries <b>twice</b> on error. On-success and on-failure <b>destinations</b> (SQS, SNS, Lambda, EventBridge) receive the result with context.` },
+    { domain: 'resilient', front: `When choose AWS Batch?`, back: `Large numbers of queued, containerized, compute-heavy jobs; Batch provisions EC2, <b>Spot</b>, Fargate or EKS capacity and scales to zero. No 15-minute limit.` },
+    { domain: 'resilient', front: `EventBridge Scheduler`, back: `Serverless one-time and recurring (cron/rate) schedules with time zones, flexible windows, retries and DLQs, invoking many AWS APIs directly.` },
+    { domain: 'resilient', front: `API Gateway default account throttle`, back: `<b>10,000 requests per second</b> steady state with a <b>5,000</b> burst per Region; excess requests get HTTP 429.` },
+    { domain: 'resilient', front: `REST API vs HTTP API`, back: `<b>REST</b>: caching, usage plans and API keys, WAF, request validation, private endpoints. <b>HTTP</b>: cheaper and faster, native JWT authorizers, fewer features.` },
+    { domain: 'resilient', front: `SES vs SNS`, back: `<b>SES</b>: email to customers (transactional and marketing), deliverability features, inbound email. <b>SNS</b>: pub/sub fan-out of notifications to subscribed endpoints.` },
+    { domain: 'resilient', front: `Route 53 Resolver inbound vs outbound endpoint`, back: `<b>Inbound</b>: on-premises DNS forwards queries <i>into</i> AWS (resolve private hosted zones). <b>Outbound</b> + forwarding rules: VPC queries forwarded <i>out</i> to on-premises DNS.` },
+    { domain: 'performance', front: `Kinesis Data Streams vs Amazon Data Firehose`, back: `<b>KDS</b>: real-time, replay (up to 365 days), custom and multiple consumers. <b>Firehose</b>: fully managed near-real-time delivery to S3, Redshift, OpenSearch, Splunk and more; no replay.` },
+    { domain: 'performance', front: `What is a Glue crawler?`, back: `A job that scans data in S3 or databases, infers the schema and creates or updates tables and partitions in the <b>Glue Data Catalog</b>.` },
+    { domain: 'performance', front: `Athena vs Redshift`, back: `<b>Athena</b>: serverless ad-hoc SQL on S3, pay per data scanned. <b>Redshift</b>: data warehouse for frequent, complex BI with many concurrent users.` },
+    { domain: 'performance', front: `When Amazon MSK instead of Kinesis?`, back: `When applications already use <b>Apache Kafka</b> APIs, tools or connectors and should move without rewriting.` },
+    { domain: 'performance', front: `Textract vs Rekognition vs Comprehend`, back: `<b>Textract</b>: text, forms and tables from documents. <b>Rekognition</b>: objects, faces, moderation in images/video. <b>Comprehend</b>: sentiment, entities and PII in text.` },
+    { domain: 'performance', front: `Transcribe vs Polly vs Translate vs Lex`, back: `<b>Transcribe</b>: speech to text. <b>Polly</b>: text to speech. <b>Translate</b>: language translation. <b>Lex</b>: chatbots with intents and slots.` },
+    { domain: 'performance', front: `SageMaker AI vs Bedrock`, back: `<b>SageMaker AI</b>: build, train and host your own ML models. <b>Bedrock</b>: serverless API access to foundation models, with Knowledge Bases (RAG), Agents and Guardrails.` },
+    { domain: 'performance', front: `Outposts vs Local Zones vs Wavelength`, back: `<b>Outposts</b>: AWS racks/servers in your data center. <b>Local Zones</b>: AWS infrastructure in metro areas near users. <b>Wavelength</b>: AWS compute inside 5G carrier networks.` },
+    { domain: 'performance', front: `What does AWS AppSync provide?`, back: `Managed <b>GraphQL</b> APIs with resolvers to DynamoDB, Lambda and more, real-time <b>subscriptions</b> over WebSockets, caching and fine-grained auth.` },
+    { domain: 'cost', front: `Cheapest way to keep CloudWatch Logs costs down`, back: `Set <b>retention policies</b> (default is never expire), reduce log verbosity, and export or stream older logs to S3 with lifecycle rules.` },
+    { domain: 'cost', front: `Cost-effective EMR patterns`, back: `Use <b>Spot for task nodes</b>, transient clusters that terminate after the job, data in S3 (EMRFS), or <b>EMR Serverless</b> for no idle cost.` },
+    { domain: 'cost', front: `Which Savings Plan covers Fargate and Lambda?`, back: `Only <b>Compute Savings Plans</b>. EC2 Instance Savings Plans and EC2 Reserved Instances cover EC2 only.` }
   ],
   questions: [
     {
@@ -1682,10 +2203,10 @@ window.TRACKS.saa = {
         `Amazon ElastiCache for Memcached`,
         `Amazon RDS for MySQL with an index on the score column`,
         `Amazon ElastiCache for Valkey (or Redis OSS) with replication and Multi-AZ, using sorted sets`,
-        `Amazon S3 with S3 Select queries`
+        `Amazon S3 objects queried with Amazon Athena`
       ],
       answer: [2],
-      explanation: `<b>ElastiCache for Valkey/Redis OSS</b> provides <b>sorted sets</b>, purpose-built for leaderboards, with replication and Multi-AZ failover for resilience. Memcached lacks sorted sets, replication and persistence. A relational database can rank with indexes, but not at sub-millisecond latency under heavy write load. S3 is object storage with far higher latency and is not designed for this.`
+      explanation: `<b>ElastiCache for Valkey/Redis OSS</b> provides <b>sorted sets</b>, purpose-built for leaderboards, with replication and Multi-AZ failover for resilience. Memcached lacks sorted sets, replication and persistence. A relational database can rank with indexes, but not at sub-millisecond latency under heavy write load. Athena queries over S3 take seconds and are built for batch analytics, not sub-millisecond real-time ranking.`
     },
     {
       id: 'saa-035', domain: 'performance', lesson: 'caching-edge', multi: false,
@@ -1966,6 +2487,555 @@ window.TRACKS.saa = {
       ],
       answer: [1],
       explanation: `<b>AWS DataSync</b> is designed for online, scheduled transfers from NFS/SMB to S3, EFS or FSx, with built-in encryption, integrity checks and incremental copies. Snowball Edge is for offline bulk transfers, not nightly syncs. Transfer Family provides SFTP/FTPS/FTP endpoints for external users to push files; it does not pull from an NFS server on a schedule. DMS migrates databases, not file systems.`
+    },
+    {
+      id: 'saa-058', domain: 'secure', lesson: 'monitoring-operations', multi: false,
+      question: `A compliance team must be able to determine which IAM principal downloaded or deleted individual objects in an S3 bucket that holds confidential contracts. CloudTrail is already enabled with a multi-Region trail using default settings. What should a solutions architect do?`,
+      options: [
+        `Enable S3 server access logging on a different bucket and query it with Amazon Macie.`,
+        `Enable AWS Config with the s3-bucket-logging-enabled managed rule.`,
+        `Configure the existing trail to log S3 data events for the confidential bucket.`,
+        `Enable CloudTrail Insights events on the trail.`
+      ],
+      answer: [2],
+      explanation: `Object-level operations such as GetObject and DeleteObject are CloudTrail <b>data events</b>, which are not logged by default; enabling them for the bucket records the principal, time and source of each call. Server access logs do record requests, but they are delivered on a best-effort basis and Macie is a sensitive-data discovery service, not a log query tool. The Config rule only checks whether logging is configured; it does not record access. CloudTrail Insights detects unusual API call volumes, not individual object access.`
+    },
+    {
+      id: 'saa-059', domain: 'secure', lesson: 'monitoring-operations', multi: false,
+      question: `A company's administrators connect to Linux EC2 instances in private subnets through a bastion host using shared SSH keys. The security team wants to remove the bastion host, close all inbound ports on the instances, and log every session, with the LEAST operational overhead. What should a solutions architect recommend?`,
+      options: [
+        `Use AWS Systems Manager Session Manager with an instance profile granting SSM permissions, and send session logs to Amazon S3.`,
+        `Replace the bastion host with an AWS Client VPN endpoint and keep port 22 open to the VPN CIDR.`,
+        `Move the instances to public subnets and restrict port 22 to the corporate IP range.`,
+        `Use EC2 Instance Connect with a security group allowing port 22 from 0.0.0.0/0.`
+      ],
+      answer: [0],
+      explanation: `<b>Session Manager</b> gives IAM-controlled shell access through the SSM Agent without SSH keys, bastions or inbound ports, and can log sessions to S3 or CloudWatch Logs. Client VPN removes the bastion but still needs port 22 open and SSH key management. Moving instances to public subnets increases exposure. Opening port 22 to the internet contradicts the requirement to close inbound ports.`
+    },
+    {
+      id: 'saa-060', domain: 'secure', lesson: 'monitoring-operations', multi: false,
+      question: `A company wants to detect any security group in its accounts that allows inbound SSH (port 22) from 0.0.0.0/0 and automatically remove the offending rule within minutes. The solution must keep a history of compliance status. Which solution meets these requirements with the LEAST operational overhead?`,
+      options: [
+        `Schedule a Lambda function every hour to describe all security groups and delete matching rules.`,
+        `Enable Amazon GuardDuty and configure it to revoke the rules.`,
+        `Use Amazon Inspector network reachability findings to remove the rules.`,
+        `Enable the AWS Config managed rule restricted-ssh with an automatic remediation action that runs a Systems Manager Automation runbook to remove the rule.`
+      ],
+      answer: [3],
+      explanation: `The <b>restricted-ssh</b> managed rule evaluates security groups on every change, records compliance history, and <b>automatic remediation</b> with an SSM Automation runbook removes the rule. A scheduled Lambda function is custom code, keeps no compliance history, and can leave the rule open for up to an hour. GuardDuty detects threats but does not remediate configuration. Inspector reports network reachability but does not change security groups.`
+    },
+    {
+      id: 'saa-061', domain: 'secure', lesson: 'monitoring-operations', multi: true,
+      question: `A company with 80 accounts in AWS Organizations needs a central, tamper-evident record of all API activity in every account and Region. Member account administrators must not be able to disable the logging or alter the log files. Which combination of steps should a solutions architect take? (Choose TWO.)`,
+      options: [
+        `Rely on the 90-day CloudTrail event history in each account.`,
+        `Create an organization trail for all Regions from the management account or a delegated administrator account.`,
+        `Ask each account administrator to create a trail that delivers to a local S3 bucket.`,
+        `Create an AWS Config aggregator in the management account.`,
+        `Deliver the trail to an S3 bucket in a dedicated log archive account with log file integrity validation enabled and a restrictive bucket policy.`
+      ],
+      answer: [1, 4],
+      explanation: `An <b>organization trail</b> automatically logs every member account and Region and cannot be modified by member accounts, and delivering it to a <b>log archive account</b> bucket with <b>integrity validation</b> makes tampering detectable and keeps logs out of reach of workload admins. Event history is per account and only 90 days. Per-account trails can be disabled by those same admins. A Config aggregator collects configuration compliance, not API activity.`
+    },
+    {
+      id: 'saa-062', domain: 'secure', lesson: 'monitoring-operations', multi: false,
+      question: `Users report intermittent connection failures to an application running on EC2 instances in a private subnet. A solutions architect suspects that a network ACL or security group is rejecting some traffic and needs to identify the rejected source IPs and ports. What is the MOST efficient way to investigate?`,
+      options: [
+        `Enable AWS CloudTrail data events for EC2 and search for denied API calls.`,
+        `Enable VPC Flow Logs on the subnet, publish them to CloudWatch Logs, and query for REJECT records with CloudWatch Logs Insights.`,
+        `Configure VPC Traffic Mirroring for every instance and inspect packets with a third-party tool.`,
+        `Install the CloudWatch agent on the instances to collect memory metrics.`
+      ],
+      answer: [1],
+      explanation: `<b>VPC Flow Logs</b> record accepted and rejected traffic with source and destination addresses and ports, and <b>Logs Insights</b> can quickly filter REJECT entries. CloudTrail records API calls, not network packets. Traffic Mirroring captures full packets and is heavier to set up than needed for identifying rejected flows. Memory metrics do not show network filtering.`
+    },
+    {
+      id: 'saa-063', domain: 'secure', lesson: 'api-frontend-integration', multi: false,
+      question: `A company is building an internal HR API on Amazon API Gateway with a Lambda back end. The API must be reachable only from applications running in the company's VPCs and never from the internet. Which solution meets this requirement?`,
+      options: [
+        `Create an edge-optimized REST API and restrict access with AWS WAF IP set rules.`,
+        `Create an HTTP API and require API keys on every request.`,
+        `Create a private REST API, create an execute-api interface VPC endpoint, and use a resource policy that allows access only through that endpoint.`,
+        `Create a Regional REST API and put it behind a CloudFront distribution with geo restriction.`
+      ],
+      answer: [2],
+      explanation: `A <b>private REST API</b> is reachable only through an <b>execute-api interface endpoint</b>, and its resource policy can restrict access to specific VPC endpoints or VPCs. An edge-optimized API is still a public endpoint even with WAF rules. HTTP APIs do not support the private endpoint type, and API keys identify clients rather than restricting network access. CloudFront geo restriction still leaves the API public on the internet.`
+    },
+    {
+      id: 'saa-064', domain: 'secure', lesson: 'iam-fundamentals', multi: true,
+      question: `A company stores shared reference data in an S3 bucket. Only principals from accounts in the company's AWS organization may read the data, and all requests must use encryption in transit. New accounts join the organization regularly. Which bucket policy elements should a solutions architect add? (Choose TWO.)`,
+      options: [
+        `An Allow statement for s3:GetObject with a condition that aws:PrincipalOrgID equals the organization ID.`,
+        `An Allow statement that lists every account ID in the organization as a principal, updated when accounts join.`,
+        `A condition requiring aws:SourceIp to match the corporate network.`,
+        `A statement granting public read access with Block Public Access disabled.`,
+        `A Deny statement for all S3 actions when aws:SecureTransport is false.`
+      ],
+      answer: [0, 4],
+      explanation: `The <b>aws:PrincipalOrgID</b> condition allows any principal in the organization, automatically including new accounts, and a <b>Deny when aws:SecureTransport is false</b> enforces HTTPS. Listing account IDs must be maintained manually as accounts join. Source IP conditions would block AWS-hosted workloads and do not express organization membership. Public read access violates the requirement entirely.`
+    },
+    {
+      id: 'saa-065', domain: 'secure', lesson: 'ai-ml-services', multi: false,
+      question: `A legal firm wants a generative AI assistant that answers employee questions using the firm's internal documents stored in Amazon S3. The firm requires that its data not be used to train the underlying models, that traffic stay off the public internet, and that it manage as little infrastructure as possible. Which solution meets these requirements?`,
+      options: [
+        `Train a custom large language model on Amazon SageMaker AI using the documents and host it on a real-time endpoint.`,
+        `Use Amazon Comprehend custom classification to answer the questions.`,
+        `Deploy an open-source model on GPU EC2 instances in a private subnet and build a custom vector database.`,
+        `Use Amazon Bedrock with a Knowledge Base over the S3 documents, accessed through an AWS PrivateLink interface endpoint.`
+      ],
+      answer: [3],
+      explanation: `<b>Bedrock Knowledge Bases</b> provide managed retrieval-augmented generation over S3 documents, Bedrock does not use customer data to train base models, and a <b>PrivateLink</b> endpoint keeps traffic private. Training a custom LLM on SageMaker AI is expensive and operationally heavy. Comprehend classifies and extracts insights from text; it does not generate answers. Self-hosting models on EC2 with a custom vector store maximizes infrastructure management.`
+    },
+    {
+      id: 'saa-066', domain: 'secure', lesson: 'analytics-ingestion', multi: false,
+      question: `A company has a data lake in Amazon S3 cataloged by the AWS Glue Data Catalog and queried with Amazon Athena. Marketing analysts must be able to query the customers table but must not see the email and phone number columns, while the finance team can see all columns. Which solution provides this with the LEAST operational overhead?`,
+      options: [
+        `Create separate copies of the table without the sensitive columns using nightly Glue jobs, and grant marketing access only to the copies.`,
+        `Register the data lake with AWS Lake Formation and grant column-level permissions on the table to each team's IAM role.`,
+        `Write S3 bucket policies that deny marketing access to objects containing email addresses.`,
+        `Encrypt the sensitive columns with a KMS key that only finance can use.`
+      ],
+      answer: [1],
+      explanation: `<b>Lake Formation</b> grants database, table and <b>column-level</b> permissions centrally, enforced by Athena, with no data duplication. Nightly copies double storage, add pipelines to maintain, and are stale between runs. S3 bucket policies work at the object level and cannot hide columns within a file. Column-level encryption would require custom application logic to encrypt and decrypt values.`
+    },
+    {
+      id: 'saa-067', domain: 'secure', lesson: 'monitoring-operations', multi: true,
+      question: `A company wants to manage and patch EC2 instances in private subnets with AWS Systems Manager. The subnets have no route to the internet and no NAT gateway, and the company does not want to add one. Which combination of steps is required? (Choose TWO.)`,
+      options: [
+        `Create interface VPC endpoints for Systems Manager (ssm and ssmmessages, plus ec2messages for older agents) in the VPC.`,
+        `Open inbound port 22 on the instances' security groups from the VPC CIDR.`,
+        `Create a gateway VPC endpoint for Systems Manager.`,
+        `Attach an instance profile with the AmazonSSMManagedInstanceCore policy to the instances, which run the SSM Agent.`,
+        `Assign Elastic IP addresses to the instances.`
+      ],
+      answer: [0, 3],
+      explanation: `Instances need the <b>SSM Agent with an IAM role</b> such as AmazonSSMManagedInstanceCore, and without internet access they reach the service through <b>interface VPC endpoints</b>. Systems Manager uses outbound HTTPS from the agent, so no inbound port 22 is needed. Gateway endpoints exist only for S3 and DynamoDB. Elastic IPs would not help in a subnet without an internet gateway route and would expose the instances.`
+    },
+    {
+      id: 'saa-068', domain: 'secure', lesson: 'api-frontend-integration', multi: false,
+      question: `A mobile app authenticates users with an Amazon Cognito user pool. The app calls a REST API on Amazon API Gateway backed by Lambda. Only signed-in users with a valid token may call the API, and the team wants to avoid writing custom authorization code. What should a solutions architect configure?`,
+      options: [
+        `A Cognito user pool authorizer on the API Gateway methods.`,
+        `A Lambda authorizer that validates the JWT signature against the user pool.`,
+        `API keys distributed to each user, with a usage plan.`,
+        `IAM authorization with long-term access keys embedded in the app.`
+      ],
+      answer: [0],
+      explanation: `A <b>Cognito user pool authorizer</b> natively validates the user pool tokens with no custom code. A Lambda authorizer works but requires writing and maintaining token-validation code. API keys identify clients for metering and are not secure user authentication. Embedding long-term access keys in a mobile app is insecure.`
+    },
+    {
+      id: 'saa-069', domain: 'secure', lesson: 'caching-edge', multi: false,
+      question: `A streaming company distributes licensed video through Amazon CloudFront. Its licensing agreement forbids delivery to viewers in three specific countries. Which solution meets this requirement with the LEAST effort?`,
+      options: [
+        `Use Route 53 geolocation routing to return an error record for those countries.`,
+        `Add network ACL rules denying the IP ranges of those countries on the origin subnets.`,
+        `Enable CloudFront geographic restrictions with a block list containing the three countries.`,
+        `Use signed cookies and refuse to issue them to users who claim to be in those countries.`
+      ],
+      answer: [2],
+      explanation: `<b>CloudFront geographic restrictions</b> block requests from specified countries at the edge with a simple configuration (AWS WAF geo match rules are another option). Route 53 geolocation affects DNS answers only and can be bypassed by resolving through other locations. NACLs on the origin do not stop CloudFront from serving cached content, and country IP ranges change frequently. Relying on users' self-declared location is not enforcement.`
+    },
+    {
+      id: 'saa-070', domain: 'secure', lesson: 'data-protection', multi: false,
+      question: `An application needs to read about 200 configuration values organized by environment, such as /prod/app/db-host and /dev/app/db-host. A few values are sensitive and must be encrypted, but none require automatic rotation. The company wants the MOST cost-effective managed solution. What should be used?`,
+      options: [
+        `AWS Secrets Manager, with one secret per value`,
+        `AWS Systems Manager Parameter Store standard parameters, using SecureString for the sensitive values`,
+        `An encrypted DynamoDB table with a custom caching layer`,
+        `AWS AppConfig with values hard-coded in the application deployment package`
+      ],
+      answer: [1],
+      explanation: `<b>Parameter Store</b> supports hierarchical names, KMS-encrypted <b>SecureString</b> parameters, and standard parameters at no additional charge, which suits configuration without rotation. Secrets Manager charges per secret per month and its main advantage, rotation, is not needed. A DynamoDB table with custom caching is extra code to build and maintain. Hard-coding values in the deployment package defeats centralized configuration and exposes sensitive values.`
+    },
+    {
+      id: 'saa-071', domain: 'resilient', lesson: 'orchestration-batch', multi: false,
+      question: `A company processes loan applications in several steps: validate documents, run a credit check through a third-party API, and wait for a loan officer to approve applications above a threshold, which can take up to five days. Each step must be retried on transient failures, and the company needs an auditable history of every application. Which solution meets these requirements with the LEAST operational overhead?`,
+      options: [
+        `Chain Lambda functions that invoke each other directly, storing state in DynamoDB.`,
+        `Use AWS Step Functions Express workflows with a Wait state of five days.`,
+        `Use an AWS Step Functions Standard workflow with Retry policies and a .waitForTaskToken step for the loan officer's approval.`,
+        `Run a long-running Python process on an EC2 instance that polls an SQS queue for each step.`
+      ],
+      answer: [2],
+      explanation: `<b>Step Functions Standard</b> workflows can run for up to a year, provide declarative <b>Retry</b> and Catch, keep a full execution history, and the <b>task token callback</b> pauses until the officer responds. Lambda functions calling each other require custom state and retry handling and are hard to audit. Express workflows are limited to five minutes, so a five-day wait is impossible. A self-managed polling process on EC2 is a single point of failure with high operational overhead.`
+    },
+    {
+      id: 'saa-072', domain: 'resilient', lesson: 'orchestration-batch', multi: false,
+      question: `An S3 event notification invokes a Lambda function asynchronously for every uploaded image. Occasionally the function fails even after Lambda's automatic retries, and those events are lost. The team needs to capture failed events together with error details for later reprocessing, with minimal code changes. What should a solutions architect do?`,
+      options: [
+        `Configure an on-failure destination for the function that sends failed invocation records to an Amazon SQS queue.`,
+        `Increase the function timeout to 15 minutes.`,
+        `Enable S3 Versioning on the bucket.`,
+        `Change the S3 event notification to invoke the function synchronously.`
+      ],
+      answer: [0],
+      explanation: `For <b>asynchronous</b> invocations, an <b>on-failure destination</b> receives the event plus error context after retries are exhausted, so it can be reprocessed from SQS. A longer timeout does not help failures caused by bad input or downstream errors. Versioning protects objects, not invocation events. S3 event notifications invoke Lambda asynchronously; you cannot switch them to synchronous invocation.`
+    },
+    {
+      id: 'saa-073', domain: 'resilient', lesson: 'orchestration-batch', multi: false,
+      question: `A Lambda function writes to an Amazon RDS for MySQL database. During traffic spikes the function scales to hundreds of concurrent executions and exhausts the database's connections, causing errors for other applications. The team must limit the load the function places on the database. Which change is the MOST direct way to do this?`,
+      options: [
+        `Enable provisioned concurrency on the function.`,
+        `Increase the function's memory to 10,240 MB.`,
+        `Move the function out of the VPC.`,
+        `Configure reserved concurrency on the function to cap its concurrent executions.`
+      ],
+      answer: [3],
+      explanation: `<b>Reserved concurrency</b> caps the number of concurrent executions of the function, which directly limits simultaneous database connections (adding RDS Proxy for connection pooling is a common complement). Provisioned concurrency pre-initializes environments to reduce cold starts but does not cap scaling. More memory makes each invocation faster but does not limit concurrency. Moving the function out of the VPC would break its private connectivity to the database.`
+    },
+    {
+      id: 'saa-074', domain: 'resilient', lesson: 'api-frontend-integration', multi: true,
+      question: `A company sells access to its weather data API, built on an Amazon API Gateway REST API with a Lambda back end. Free-tier customers must be limited to 1,000 requests per day and 5 requests per second, premium customers get higher limits, and the back end must be protected from sudden bursts. Which combination of steps meets these requirements? (Choose TWO.)`,
+      options: [
+        `Put an Application Load Balancer in front of API Gateway to rate limit requests.`,
+        `Configure Lambda reserved concurrency of 5 for the free tier.`,
+        `Create usage plans for the free and premium tiers with throttling limits and daily quotas, and associate each customer's API key with the right plan.`,
+        `Migrate the API to an HTTP API and use JWT authorizers to enforce quotas.`,
+        `Set stage-level and method-level throttling limits on the API so excess requests receive 429 responses before reaching Lambda.`
+      ],
+      answer: [2, 4],
+      explanation: `<b>Usage plans with API keys</b> enforce per-customer throttling and quotas by tier, and <b>stage and method throttling</b> protects the back end from bursts by rejecting excess requests with 429 errors. An ALB cannot sit in front of API Gateway for per-customer rate limiting. Reserved concurrency limits the function for all customers together, not per tier. HTTP APIs do not support usage plans or API keys, and JWT authorizers do not enforce quotas.`
+    },
+    {
+      id: 'saa-075', domain: 'resilient', lesson: 'edge-hybrid-compute', multi: false,
+      question: `A company connects its data center to a VPC with AWS Direct Connect. Applications on EC2 instances must resolve hostnames in the on-premises domain corp.example.com, which is hosted on the company's own DNS servers. Which solution meets this requirement?`,
+      options: [
+        `Create a Route 53 private hosted zone for corp.example.com and copy all records manually.`,
+        `Create a Route 53 Resolver outbound endpoint and a forwarding rule that sends queries for corp.example.com to the on-premises DNS servers, and associate the rule with the VPC.`,
+        `Create a Route 53 Resolver inbound endpoint and point the on-premises DNS servers at it.`,
+        `Change the VPC DHCP options set to use only the on-premises DNS servers.`
+      ],
+      answer: [1],
+      explanation: `An <b>outbound endpoint</b> with a <b>forwarding rule</b> sends queries for the on-premises domain to the corporate DNS servers while the VPC still resolves AWS names normally. Copying records into a private hosted zone creates a stale duplicate to maintain. An inbound endpoint handles the opposite direction, on-premises to AWS. Pointing DHCP options only at on-premises DNS breaks or slows resolution of AWS names and private hosted zones and makes DNS depend entirely on the link.`
+    },
+    {
+      id: 'saa-076', domain: 'resilient', lesson: 'edge-hybrid-compute', multi: false,
+      question: `A company hosts internal services in AWS with records in a Route 53 private hosted zone named aws.example.internal. Servers in the company's data center, connected through Site-to-Site VPN, must resolve these records. The on-premises DNS servers support conditional forwarding. What should a solutions architect do?`,
+      options: [
+        `Make the private hosted zone public.`,
+        `Create a Route 53 Resolver outbound endpoint in the VPC.`,
+        `Associate the private hosted zone with the customer gateway.`,
+        `Create a Route 53 Resolver inbound endpoint in the VPC and configure the on-premises DNS servers to conditionally forward aws.example.internal to the endpoint IP addresses.`
+      ],
+      answer: [3],
+      explanation: `A Resolver <b>inbound endpoint</b> provides IP addresses in the VPC that on-premises DNS servers can forward queries to, and it answers from the private hosted zones associated with the VPC. Making the zone public exposes internal names to the internet. Outbound endpoints forward queries from AWS to on-premises, the opposite direction. Private hosted zones can be associated only with VPCs, not with customer gateways.`
+    },
+    {
+      id: 'saa-077', domain: 'resilient', lesson: 'ha-databases', multi: false,
+      question: `An application connects to an Amazon Aurora PostgreSQL cluster using the endpoint of a specific DB instance that is currently the writer. After an Aurora failover promoted a replica, the application could no longer write to the database until it was reconfigured. How should the application be changed to handle failovers automatically?`,
+      options: [
+        `Connect to the cluster (writer) endpoint for writes and the reader endpoint for reads.`,
+        `Connect to a custom endpoint containing only the original writer instance.`,
+        `Hard-code the IP address of the writer instance.`,
+        `Enable Aurora Backtrack on the cluster.`
+      ],
+      answer: [0],
+      explanation: `The <b>cluster endpoint</b> always points to the current writer, so after failover it follows the newly promoted instance, while the <b>reader endpoint</b> load-balances reads across replicas. A custom endpoint with only the original instance would point at a reader after failover. IP addresses change and are not stable. Backtrack rewinds data to a point in time; it has nothing to do with connection routing.`
+    },
+    {
+      id: 'saa-078', domain: 'resilient', lesson: 'ha-compute-routing', multi: true,
+      question: `A web application stores user session data in memory on each EC2 instance and runs in a single Availability Zone. When an instance is replaced, users are logged out, and an AZ outage would take the site down. Which combination of changes makes the application highly available and stateless? (Choose TWO.)`,
+      options: [
+        `Enable sticky sessions on the load balancer with a long cookie duration.`,
+        `Store session data in Amazon ElastiCache (or DynamoDB) instead of instance memory.`,
+        `Store session data on instance store volumes.`,
+        `Run the instances in an Auto Scaling group across multiple Availability Zones behind an Application Load Balancer.`,
+        `Use a larger instance type with more memory.`
+      ],
+      answer: [1, 3],
+      explanation: `Moving sessions to <b>ElastiCache</b> (or DynamoDB) makes the web tier stateless so any instance can serve any user, and a <b>multi-AZ Auto Scaling group behind an ALB</b> survives instance and AZ failures. Sticky sessions still lose sessions when an instance fails. Instance store is ephemeral and tied to one instance. A larger instance remains a single point of failure.`
+    },
+    {
+      id: 'saa-079', domain: 'resilient', lesson: 'orchestration-batch', multi: false,
+      question: `A subscription service must send each customer a reminder exactly 3 days before their individual renewal date, in the customer's local time zone. There are millions of customers, and the company currently runs a cron job on a single EC2 instance that scans a database every minute. The company wants a more reliable solution with the LEAST operational overhead. What should a solutions architect recommend?`,
+      options: [
+        `Run the cron job on two EC2 instances in different AZs for redundancy.`,
+        `Create a CloudWatch alarm per customer that triggers on the renewal date.`,
+        `Create a one-time schedule per customer in Amazon EventBridge Scheduler with the customer's time zone, targeting a Lambda function or SNS, with retries and a dead-letter queue.`,
+        `Use an SQS delay queue with the delay set to the time remaining until each reminder.`
+      ],
+      answer: [2],
+      explanation: `<b>EventBridge Scheduler</b> supports millions of one-time schedules with time zones, built-in retries and DLQs, and needs no servers. Two cron instances would send duplicates unless you add coordination, and still require management. CloudWatch alarms watch metrics; they are not per-customer schedulers. SQS delay queues support delays of at most 15 minutes.`
+    },
+    {
+      id: 'saa-080', domain: 'resilient', lesson: 'orchestration-batch', multi: false,
+      question: `A genomics company submits thousands of containerized analysis jobs each night. Each job runs for 1 to 4 hours, can be restarted if interrupted, and needs varying amounts of CPU and memory. The company wants to minimize cost and avoid managing schedulers or clusters. Which solution is MOST appropriate?`,
+      options: [
+        `Run each job as a Lambda function invoked by Step Functions.`,
+        `Use AWS Batch with a managed compute environment that uses EC2 Spot Instances, submitting jobs to a job queue.`,
+        `Run a self-managed Kubernetes cluster on On-Demand EC2 instances.`,
+        `Launch one large On-Demand EC2 instance per job from a cron script.`
+      ],
+      answer: [1],
+      explanation: `<b>AWS Batch</b> queues jobs, provisions right-sized compute, scales to zero, and with <b>Spot</b> capacity gives large savings for restartable jobs, with no scheduler to manage. Lambda's 15-minute limit rules it out for multi-hour jobs. A self-managed Kubernetes cluster adds significant operational work and On-Demand cost. Scripted per-job instances require custom orchestration and cost more.`
+    },
+    {
+      id: 'saa-081', domain: 'resilient', lesson: 'edge-hybrid-compute', multi: false,
+      question: `A manufacturer needs to run an inspection application on its factory floor with single-digit millisecond latency to the production-line equipment. Regulations require the production data to remain on site. The company wants to use the same AWS APIs, tools and services it uses in the Region. Which solution meets these requirements?`,
+      options: [
+        `Deploy AWS Outposts in the factory and run the application on EC2 with data stored locally.`,
+        `Deploy the application in the nearest AWS Local Zone.`,
+        `Deploy the application in AWS Wavelength Zones.`,
+        `Deploy the application in the closest AWS Region and connect with Direct Connect.`
+      ],
+      answer: [0],
+      explanation: `<b>AWS Outposts</b> places AWS infrastructure in the customer's facility, giving local low latency and keeping data on site while using the same AWS APIs and tools. A Local Zone is AWS-operated infrastructure in a metro area, so data would leave the factory. Wavelength targets 5G mobile devices inside carrier networks. Even with Direct Connect, a Region is off site and adds network latency.`
+    },
+    {
+      id: 'saa-082', domain: 'resilient', lesson: 'ha-databases', multi: false,
+      question: `A bug in a new application release corrupted thousands of items in a DynamoDB table about 40 minutes ago. The company needs to recover the table to its state just before the release with minimal data loss. What should the company have enabled to make this possible?`,
+      options: [
+        `DynamoDB Streams with a Lambda function that logs changes`,
+        `DynamoDB global tables`,
+        `DynamoDB Accelerator (DAX)`,
+        `DynamoDB point-in-time recovery (PITR)`
+      ],
+      answer: [3],
+      explanation: `<b>Point-in-time recovery</b> keeps continuous backups and can restore the table to any second within the retention window into a new table. Streams with a logging function would require custom code to replay changes. Global tables replicate writes, including the corrupted ones, to every Region. DAX is a read cache and offers no recovery capability.`
+    },
+    {
+      id: 'saa-083', domain: 'performance', lesson: 'analytics-ingestion', multi: false,
+      question: `A financial trading platform ingests market events that must be processed in real time with sub-second latency by three independent applications: fraud detection, a risk calculator, and an archiver. Each application must read the full stream at its own pace, and the fraud team must be able to reprocess the last 3 days of events after deploying a new model. Which service should be used to ingest the events?`,
+      options: [
+        `Amazon Data Firehose delivering to Amazon S3`,
+        `Amazon SQS standard queue`,
+        `Amazon Kinesis Data Streams with enhanced fan-out consumers and extended retention`,
+        `Amazon SNS standard topic`
+      ],
+      answer: [2],
+      explanation: `<b>Kinesis Data Streams</b> delivers records in real time to multiple independent consumers (<b>enhanced fan-out</b> gives each dedicated throughput) and retains data so consumers can <b>replay</b> it; extending retention beyond 24 hours covers the 3-day requirement. Firehose buffers and delivers data to destinations and offers no replay. An SQS message is consumed by one consumer and deleted, so three applications cannot each read every event. SNS pushes messages but does not retain them for replay.`
+    },
+    {
+      id: 'saa-084', domain: 'performance', lesson: 'analytics-ingestion', multi: false,
+      question: `A company runs Amazon Athena queries for its executive dashboards. The same complex queries, joining several multi-terabyte tables, run hundreds of times per day for 200 concurrent business users. Queries are slow and Athena charges are growing rapidly. What should a solutions architect recommend to improve performance for this workload?`,
+      options: [
+        `Load the curated data into Amazon Redshift (for example Redshift Serverless) and point the dashboards at it.`,
+        `Convert the data from Parquet to CSV.`,
+        `Move the data to Amazon RDS for PostgreSQL.`,
+        `Increase the Athena workgroup's per-query data usage limit.`
+      ],
+      answer: [0],
+      explanation: `Frequent, complex, highly concurrent BI queries are the classic case for a <b>data warehouse</b>: Redshift's columnar MPP engine, caching and concurrency scaling serve them faster and more predictably than per-scan Athena pricing. Converting Parquet to CSV increases data scanned and slows queries. RDS is an OLTP database not designed for multi-terabyte analytical joins. Raising the workgroup data limit only allows larger scans; it does not make queries faster or cheaper.`
+    },
+    {
+      id: 'saa-085', domain: 'performance', lesson: 'edge-hybrid-compute', multi: false,
+      question: `A visual effects studio in Los Angeles wants artists to use cloud-based graphics workstations with single-digit millisecond latency. The nearest AWS Region is several hundred miles away, and current latency is too high for interactive work. Which solution meets this requirement?`,
+      options: [
+        `Use Amazon CloudFront in front of the workstations.`,
+        `Deploy the workstations in AWS Wavelength Zones.`,
+        `Use AWS Global Accelerator in front of instances in the nearest Region.`,
+        `Deploy the workstation instances in the Los Angeles AWS Local Zone.`
+      ],
+      answer: [3],
+      explanation: `<b>Local Zones</b> place AWS compute in metro areas such as Los Angeles, giving single-digit millisecond latency to nearby users. CloudFront caches and accelerates HTTP content; it cannot run interactive workstations. Wavelength is designed for 5G mobile devices inside carrier networks, not studio workstations. Global Accelerator optimizes the network path but cannot remove the physical distance to a far-away Region.`
+    },
+    {
+      id: 'saa-086', domain: 'performance', lesson: 'edge-hybrid-compute', multi: false,
+      question: `A company is building an augmented reality application for smartphones that streams processed video back to users on 5G networks. The processing must happen with the lowest possible latency from the mobile devices. Where should the processing tier be deployed?`,
+      options: [
+        `AWS Outposts in the company's headquarters`,
+        `AWS Wavelength Zones within the telecom carriers' 5G networks`,
+        `An AWS Region with Amazon CloudFront`,
+        `AWS Local Zones with an internet gateway`
+      ],
+      answer: [1],
+      explanation: `<b>Wavelength</b> embeds AWS compute inside carriers' 5G networks, so traffic from mobile devices reaches the application without leaving the carrier network, giving the lowest latency. Outposts sits in the company's own facility, far from mobile users' network paths. A Region with CloudFront still routes processing traffic through the internet to a distant Region. Local Zones reduce latency for a metro area but traffic still traverses the internet from the carrier network.`
+    },
+    {
+      id: 'saa-087', domain: 'performance', lesson: 'ai-ml-services', multi: true,
+      question: `An insurance company receives claim submissions containing scanned claim forms with tables and handwritten fields, plus photos of vehicle damage. It wants to automatically extract the form data and identify objects and unsafe content in the photos, without building or training machine learning models. Which services should be used? (Choose TWO.)`,
+      options: [
+        `Amazon Textract to extract text, key-value pairs and tables from the scanned forms`,
+        `Amazon Comprehend to read the scanned forms`,
+        `Amazon Polly to process the photos`,
+        `Amazon Rekognition to detect labels and moderation content in the photos`,
+        `Amazon SageMaker AI to train a custom OCR model`
+      ],
+      answer: [0, 3],
+      explanation: `<b>Textract</b> extracts printed and handwritten text, forms and tables from documents, and <b>Rekognition</b> detects objects, scenes and unsafe content in images, both as pre-trained APIs. Comprehend analyzes text that has already been extracted; it cannot read scanned images. Polly converts text to speech. Training a custom OCR model in SageMaker AI is unnecessary effort when Textract exists.`
+    },
+    {
+      id: 'saa-088', domain: 'performance', lesson: 'ai-ml-services', multi: false,
+      question: `A contact center stores thousands of recorded customer calls in Amazon S3 each day. Managers want to know the overall sentiment of each call and the products mentioned, with the LEAST development effort. Which solution should a solutions architect recommend?`,
+      options: [
+        `Use Amazon Polly to convert the recordings to text and Amazon Translate to score sentiment.`,
+        `Use Amazon Rekognition to analyze the audio files.`,
+        `Use Amazon Transcribe to convert the recordings to text, then Amazon Comprehend to detect sentiment and entities.`,
+        `Train a speech recognition model and a sentiment model in Amazon SageMaker AI.`
+      ],
+      answer: [2],
+      explanation: `<b>Transcribe</b> converts speech to text and <b>Comprehend</b> extracts sentiment and entities from that text, both fully managed. Polly does the opposite (text to speech) and Translate translates languages; neither scores sentiment. Rekognition analyzes images and video, not audio. Training custom models in SageMaker AI is far more effort than using the pre-trained services.`
+    },
+    {
+      id: 'saa-089', domain: 'performance', lesson: 'api-frontend-integration', multi: false,
+      question: `A REST API on Amazon API Gateway returns product details from a Lambda function that queries a database. The same few thousand product requests are repeated constantly, the data changes only every few minutes, and the database is under heavy load. What is the SIMPLEST way to reduce latency and back-end load?`,
+      options: [
+        `Enable API Gateway caching on the stage with a TTL of a few minutes.`,
+        `Increase the Lambda function memory.`,
+        `Enable provisioned concurrency on the Lambda function.`,
+        `Convert the REST API to a WebSocket API.`
+      ],
+      answer: [0],
+      explanation: `<b>API Gateway caching</b> (a REST API feature) serves repeated requests from the cache for the TTL, so most requests never reach Lambda or the database. More memory speeds the function but every request still hits the database. Provisioned concurrency reduces cold starts, not database load. WebSocket APIs are for persistent two-way connections and do not cache responses.`
+    },
+    {
+      id: 'saa-090', domain: 'performance', lesson: 'api-frontend-integration', multi: false,
+      question: `A company is building a collaborative task-tracking app for web and mobile. Clients need to fetch exactly the fields they display in a single request, and all users viewing a board must see changes from other users in real time. The team wants a fully managed solution. Which service should be used for the API layer?`,
+      options: [
+        `Amazon API Gateway REST API with polling every second`,
+        `Amazon SNS with mobile push notifications for every change`,
+        `An Application Load Balancer with WebSocket support in front of EC2`,
+        `AWS AppSync with a GraphQL schema, DynamoDB resolvers and subscriptions`
+      ],
+      answer: [3],
+      explanation: `<b>AppSync</b> is managed <b>GraphQL</b>, so clients request only the fields they need, and <b>subscriptions</b> push real-time updates to connected clients. Polling a REST API every second adds latency, cost and load. Push notifications are for alerts, not live in-app data sync and field-level queries. An ALB with WebSockets on EC2 requires building and operating the real-time servers yourself.`
+    },
+    {
+      id: 'saa-091', domain: 'performance', lesson: 'orchestration-batch', multi: false,
+      question: `A Java-based Lambda function behind API Gateway takes several seconds to initialize because it loads a large framework, causing slow responses after scaling events. Traffic is unpredictable, and the company wants to reduce cold-start latency without paying to keep environments running continuously. What should a solutions architect recommend?`,
+      options: [
+        `Enable provisioned concurrency sized for peak traffic.`,
+        `Enable Lambda SnapStart on a published version of the function and invoke it through an alias.`,
+        `Increase the function timeout to 15 minutes.`,
+        `Schedule an EventBridge rule to invoke the function every minute to keep it warm.`
+      ],
+      answer: [1],
+      explanation: `<b>SnapStart</b> snapshots the initialized execution environment of a published version and restores it on cold start, greatly reducing Java initialization time with no extra charge for Java. Provisioned concurrency removes cold starts but is billed for as long as it is configured, which the company wants to avoid. The timeout does not affect initialization time. Keep-warm pings maintain only a few environments and do not help when traffic scales out.`
+    },
+    {
+      id: 'saa-092', domain: 'performance', lesson: 'analytics-ingestion', multi: false,
+      question: `An e-commerce company stores its product catalog in Amazon DynamoDB. Customers need full-text search with relevance ranking, fuzzy matching and faceted filters on product descriptions. The company wants to keep DynamoDB as the source of truth and avoid building custom data pipelines. Which solution meets these requirements?`,
+      options: [
+        `Use DynamoDB Scan operations with a contains() filter expression.`,
+        `Add global secondary indexes for every word in the product descriptions.`,
+        `Use the DynamoDB zero-ETL integration with Amazon OpenSearch Service and run search queries against OpenSearch.`,
+        `Export the table to S3 nightly and query it with Amazon Athena.`
+      ],
+      answer: [2],
+      explanation: `<b>OpenSearch Service</b> provides full-text search with relevance, fuzzy matching and aggregations, and the <b>zero-ETL integration</b> keeps it in sync with DynamoDB without custom pipelines. Scans with contains() read the whole table, are slow and costly, and give no relevance ranking. GSIs cannot index individual words of free text. Nightly exports to Athena are stale and Athena is not a low-latency search engine.`
+    },
+    {
+      id: 'saa-093', domain: 'performance', lesson: 'monitoring-operations', multi: true,
+      question: `An operations team needs to scale an Auto Scaling group of Linux EC2 instances based on memory utilization and receive an alert when memory stays above 85% for 10 minutes. CloudWatch currently shows no memory metrics for the instances. Which combination of steps should be taken? (Choose TWO.)`,
+      options: [
+        `Enable detailed monitoring on the instances to collect memory metrics.`,
+        `Install and configure the CloudWatch agent on the instances (for example through the launch template and Systems Manager) to publish memory metrics.`,
+        `Enable VPC Flow Logs for the instances' subnets.`,
+        `Create a CloudTrail trail that records memory usage events.`,
+        `Create a CloudWatch alarm on the memory metric that notifies an SNS topic, and a target tracking scaling policy using the metric.`
+      ],
+      answer: [1, 4],
+      explanation: `Memory is not a default EC2 metric, so the <b>CloudWatch agent</b> must publish it; then a <b>CloudWatch alarm</b> with an SNS action provides alerts and a target tracking policy on the custom metric drives scaling. Detailed monitoring only increases the frequency of the default metrics, which still exclude memory. Flow Logs record network traffic. CloudTrail records API calls, not resource utilization.`
+    },
+    {
+      id: 'saa-094', domain: 'cost', lesson: 'analytics-ingestion', multi: false,
+      question: `A data engineering team runs Apache Spark jobs for about 2 hours each night on a persistent Amazon EMR cluster of On-Demand instances that sits idle the rest of the day. The team wants to reduce cost and stop managing cluster capacity, without rewriting the Spark code. What is the MOST cost-effective solution?`,
+      options: [
+        `Purchase 3-year Reserved Instances for the existing EMR cluster nodes.`,
+        `Run the Spark jobs on Amazon EMR Serverless.`,
+        `Load the data into a provisioned Amazon Redshift cluster and rewrite the jobs in SQL.`,
+        `Move the jobs to a self-managed Spark cluster on larger EC2 instances.`
+      ],
+      answer: [1],
+      explanation: `<b>EMR Serverless</b> runs existing Spark applications, allocates capacity automatically for each job and charges only for resources used while jobs run, eliminating 22 idle hours a day. Reserved Instances still pay for the idle cluster around the clock. Rewriting jobs for a provisioned Redshift cluster is a large effort and the cluster would also sit idle. A self-managed cluster increases operational work and keeps idle costs.`
+    },
+    {
+      id: 'saa-095', domain: 'cost', lesson: 'monitoring-operations', multi: true,
+      question: `A company's Amazon CloudWatch Logs charges have grown steadily for two years. Investigation shows that log groups use the default settings, applications log verbose debug output in production, and compliance requires keeping application logs for one year but they are rarely read after 30 days. Which actions will reduce costs while meeting the requirements? (Choose THREE.)`,
+      options: [
+        `Set retention policies on the log groups instead of the default of never expiring.`,
+        `Enable detailed monitoring on all EC2 instances.`,
+        `Reduce production log levels from debug to info or warn.`,
+        `Create a metric filter for every log line so logs can be deleted immediately.`,
+        `Export or stream logs to Amazon S3 and use S3 Lifecycle rules to move them to cheaper storage classes until one year has passed.`
+      ],
+      answer: [0, 2, 4],
+      explanation: `<b>Retention policies</b> stop paying to store logs forever, <b>lower log levels</b> cut ingestion volume (ingestion is often the largest charge), and keeping older logs in <b>S3 with lifecycle rules</b> meets the one-year requirement at much lower storage cost. Detailed monitoring adds metric charges and does nothing for logs. Metric filters create metrics from logs but do not replace the logs compliance requires, and many custom metrics add cost.`
+    },
+    {
+      id: 'saa-096', domain: 'cost', lesson: 'api-frontend-integration', multi: false,
+      question: `An online retailer needs to send order confirmation and shipping emails with HTML templates to millions of customers each month and track bounces and complaints. It is currently paying a third-party email provider and wants the MOST cost-effective AWS-native solution. Which service should be used?`,
+      options: [
+        `Amazon SNS email subscriptions for each customer`,
+        `An SMTP server on EC2 instances behind a Network Load Balancer`,
+        `Amazon SES with configuration sets for bounce and complaint tracking`,
+        `Amazon SQS with a Lambda function that sends email through an SNS topic`
+      ],
+      answer: [2],
+      explanation: `<b>Amazon SES</b> is built for high-volume transactional and marketing email, with templates, DKIM/SPF support and bounce and complaint tracking through configuration sets, at low per-message cost. SNS email subscriptions require each recipient to confirm a subscription and send plain notifications, not branded customer emails. Self-managed SMTP servers on EC2 add operational effort and deliverability risk. SQS plus SNS still ends up using SNS email, with the same limitations.`
+    },
+    {
+      id: 'saa-097', domain: 'cost', lesson: 'api-frontend-integration', multi: false,
+      question: `A team is building a new internal microservice API that proxies requests to Lambda functions and authorizes callers with JWTs issued by the company's OpenID Connect identity provider. The API does not need caching, usage plans or AWS WAF. Which option provides the required functionality at the LOWEST cost?`,
+      options: [
+        `Amazon API Gateway HTTP API with a JWT authorizer`,
+        `Amazon API Gateway REST API with a Lambda authorizer`,
+        `An Application Load Balancer with Lambda targets and EC2-based token validation`,
+        `Amazon API Gateway REST API with caching enabled`
+      ],
+      answer: [0],
+      explanation: `<b>HTTP APIs</b> cost less per request than REST APIs and include native <b>JWT authorizers</b> for OIDC providers, so no authorizer code or extra invocations are needed. A REST API with a Lambda authorizer costs more per request and adds authorizer invocations. An ALB has hourly charges and the EC2-based validation adds servers to manage. Caching on a REST API adds hourly cache charges for a feature the team does not need.`
+    },
+    {
+      id: 'saa-098', domain: 'cost', lesson: 'ai-ml-services', multi: false,
+      question: `A travel website wants to offer its 50,000 hotel descriptions in 10 languages and keep translations up to date as descriptions change. Brand names must never be translated. The company has no machine learning expertise and wants the MOST cost-effective solution. What should a solutions architect recommend?`,
+      options: [
+        `Train a custom translation model on Amazon SageMaker AI for each language pair.`,
+        `Hire translators and store the translations in DynamoDB.`,
+        `Use Amazon Comprehend to detect the language and generate translations.`,
+        `Use Amazon Translate with a custom terminology list for brand names, triggered by changes to the descriptions.`
+      ],
+      answer: [3],
+      explanation: `<b>Amazon Translate</b> is a pay-per-character managed translation service, and <b>custom terminology</b> keeps brand names unchanged; triggering it on updates keeps translations current. Training custom models in SageMaker AI requires ML expertise, training data and hosting costs. Human translation is slow and expensive at this scale and frequency. Comprehend detects language and analyzes text but does not translate.`
+    },
+    {
+      id: 'saa-099', domain: 'cost', lesson: 's3-storage-classes', multi: false,
+      question: `A company enabled S3 Versioning on a bucket to protect against accidental deletes. Applications overwrite the same objects many times per day, and S3 storage costs have tripled even though the amount of current data has not changed. Older versions are needed for only 30 days. What is the MOST cost-effective fix?`,
+      options: [
+        `Suspend versioning on the bucket.`,
+        `Add an S3 Lifecycle rule that permanently deletes noncurrent object versions 30 days after they become noncurrent.`,
+        `Move all objects to S3 Glacier Deep Archive.`,
+        `Enable S3 Intelligent-Tiering for the current versions.`
+      ],
+      answer: [1],
+      explanation: `Every overwrite keeps a noncurrent version that is billed for storage. A <b>lifecycle rule expiring noncurrent versions</b> after 30 days keeps the required protection window and removes the rest automatically. Suspending versioning removes protection against accidental overwrites and deletes, and existing versions remain billed. Deep Archive suits rarely accessed archives, not actively updated data, and has 180-day minimum charges. Intelligent-Tiering optimizes current objects but does nothing about the accumulating old versions.`
+    },
+    {
+      id: 'saa-100', domain: 'cost', lesson: 'ec2-purchasing', multi: true,
+      question: `A company runs a containerized application on Amazon ECS with AWS Fargate. A set of API tasks runs steadily 24/7 and will continue for at least 3 years. A separate set of queue-processing tasks is stateless, checkpoints its progress, and can tolerate interruptions. Which actions provide the GREATEST cost savings? (Choose TWO.)`,
+      options: [
+        `Run the queue-processing tasks on Fargate Spot.`,
+        `Purchase EC2 Instance Savings Plans for the API tasks.`,
+        `Purchase a 3-year Compute Savings Plan covering the steady API task usage.`,
+        `Purchase Standard Reserved Instances for the Fargate tasks.`,
+        `Move the API tasks to Dedicated Hosts.`
+      ],
+      answer: [0, 2],
+      explanation: `<b>Fargate Spot</b> offers a large discount for interruption-tolerant tasks, and a <b>Compute Savings Plan</b> is the commitment option that applies to Fargate usage. EC2 Instance Savings Plans and Reserved Instances apply only to EC2 instances, not Fargate. Dedicated Hosts are a premium option for licensing and compliance and would increase cost.`
+    },
+    {
+      id: 'saa-101', domain: 'cost', lesson: 'decoupling', multi: false,
+      question: `Worker instances poll an Amazon SQS queue continuously. Most of the time the queue is empty, and the SQS bill shows a very large number of empty ReceiveMessage responses. How can the company reduce SQS costs without delaying message processing?`,
+      options: [
+        `Convert the queue to a FIFO queue.`,
+        `Increase the visibility timeout to 12 hours.`,
+        `Add a delay of 15 minutes to every message.`,
+        `Enable long polling by setting the receive message wait time to up to 20 seconds.`
+      ],
+      answer: [3],
+      explanation: `<b>Long polling</b> keeps the receive request open for up to 20 seconds until a message arrives, which sharply reduces empty responses (and request charges) while still returning messages as soon as they are available. FIFO queues change ordering semantics and do not reduce empty receives. The visibility timeout only matters after a message is received. Delaying messages slows processing and does not reduce polling.`
+    },
+    {
+      id: 'saa-102', domain: 'cost', lesson: 'orchestration-batch', multi: false,
+      question: `An IoT platform uses AWS Step Functions Standard workflows to validate, enrich and store each device message. Each workflow completes in under 2 seconds, there are about 50 million executions per day, and the steps are idempotent. Step Functions costs are very high. Which change will MOST reduce cost while keeping the orchestration?`,
+      options: [
+        `Add Wait states to reduce the number of executions per second.`,
+        `Replace the workflow with one Lambda function per device.`,
+        `Switch to Step Functions Express workflows.`,
+        `Move the workflow logic to an EC2 instance running a cron job.`
+      ],
+      answer: [2],
+      explanation: `<b>Express workflows</b> are designed for high-volume, short-duration processing and are priced by requests and duration rather than per state transition, which is much cheaper at this scale; their at-least-once semantics are fine for idempotent steps. Wait states lengthen executions without reducing transitions. One function per device is not a practical design and loses orchestration. A cron job on EC2 removes managed orchestration and creates a scaling and availability bottleneck.`
     }
   ]
 };

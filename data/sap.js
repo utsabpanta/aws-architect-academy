@@ -192,6 +192,7 @@ window.TRACKS.sap = {
 <li><strong>Segmentation:</strong> Prod VPCs associate with a Prod table, Dev VPCs with a Dev table; both propagate to a Shared table used by the shared-services VPC and the VPN/DX attachment. Prod and Dev cannot reach each other because neither table has the other's routes.</li>
 <li><strong>Blackhole routes</strong> explicitly drop traffic to a CIDR.</li>
 <li><strong>Inter-Region peering</strong> connects TGWs across Regions over the AWS backbone; peering attachments use <strong>static routes</strong> (no propagation across the peering).</li>
+<li><strong>AWS Cloud WAN</strong> builds a global core network from a single declarative network policy with <strong>segments</strong> (for example prod, dev, shared) and automatic route propagation between Regions – the better fit when TGW peering meshes and static routes across many Regions become hard to manage.</li>
 <li><strong>Appliance mode</strong> on the inspection VPC attachment keeps both directions of a flow on the same AZ's appliance – required for stateful firewalls.</li>
 <li>Share the TGW with other accounts using <strong>RAM</strong>; the network account owns the route tables.</li>
 </ul>
@@ -253,9 +254,10 @@ window.TRACKS.sap = {
             `If it says "survive the failure of a Direct Connect location", you need connections in two locations; a LAG or two links at one site is wrong.`,
             `If it says "encrypt traffic over Direct Connect without exposing public IPs", think Private IP VPN over a transit VIF to a TGW (or MACsec).`,
             `If one DX connection must reach VPCs in several Regions, think Direct Connect gateway.`,
-            `If a stateful firewall in an inspection VPC drops return traffic, think TGW appliance mode.`
+            `If a stateful firewall in an inspection VPC drops return traffic, think TGW appliance mode.`,
+            `If a global network across many Regions needs segment-based isolation managed from one policy, think AWS Cloud WAN rather than a hand-built TGW peering mesh.`
           ],
-          services: ['AWS Transit Gateway', 'AWS Direct Connect', 'AWS Site-to-Site VPN', 'Amazon VPC', 'AWS Resource Access Manager']
+          services: ['AWS Transit Gateway', 'AWS Direct Connect', 'AWS Site-to-Site VPN', 'Amazon VPC', 'AWS Resource Access Manager', 'AWS Cloud WAN']
         },
         {
           id: 'p-dns-privatelink-inspection',
@@ -323,6 +325,177 @@ window.TRACKS.sap = {
             `If the requirement is "filter outbound traffic by domain name centrally", think Network Firewall stateful domain lists in an inspection VPC (or DNS Firewall for DNS-level blocking).`
           ],
           services: ['Amazon Route 53 Resolver', 'Route 53 Profiles', 'AWS PrivateLink', 'Amazon VPC Lattice', 'AWS Network Firewall', 'Gateway Load Balancer', 'AWS Firewall Manager']
+        },
+        {
+          id: 'p-identity-federation',
+          title: 'Identity Federation Deep Dive: Identity Center, ABAC, Cognito & Delegated Administration',
+          minutes: 18,
+          summary: `Federate workforce identities into many accounts, scale authorization with attributes instead of roles, pick the right Cognito component for customer identities, and let teams create IAM roles without letting them escalate privileges.`,
+          sections: [
+            {
+              heading: 'IAM Identity Center architecture',
+              html: `<p>An <strong>organization instance</strong> of IAM Identity Center is the standard way to give workforce users access to many AWS accounts and to Identity Center-integrated applications. (Account instances exist only for isolated application use and cannot assign access to AWS accounts.) Each instance has exactly <strong>one identity source</strong> at a time.</p>
+<table><thead><tr><th>Identity source</th><th>Authentication</th><th>Provisioning</th><th>Fits</th></tr></thead><tbody>
+<tr><td>Identity Center directory</td><td>Identity Center (with MFA)</td><td>Manual, API or scripted</td><td>Small organizations with no corporate IdP</td></tr>
+<tr><td>Active Directory (AWS Managed Microsoft AD, or self-managed AD through AD Connector)</td><td>Active Directory</td><td>Configurable AD sync of selected users and groups</td><td>AD-centric enterprises</td></tr>
+<tr><td>External IdP (Microsoft Entra ID, Okta, Ping, Google Workspace…)</td><td><strong>SAML 2.0</strong></td><td><strong>SCIM</strong> automatic provisioning and deprovisioning</td><td>Most enterprises</td></tr>
+</tbody></table>
+<ul>
+<li><strong>Permission sets</strong> combine AWS managed policies, <strong>customer managed policies referenced by name</strong> (a policy with that name and path must already exist in every target account), an inline policy, and optionally a <strong>permissions boundary</strong>. Assigning a group plus a permission set to an account creates an <code>AWSReservedSSO_</code> role there.</li>
+<li>Run Identity Center from a <strong>delegated administrator</strong> account so day-to-day administration avoids the management account.</li>
+<li><strong>Trusted identity propagation</strong> passes the end user's identity to services such as Amazon Redshift, Athena with Lake Formation, S3 Access Grants and Amazon Q Business, so data access can be authorized per user rather than per shared role.</li>
+</ul>
+<div class="callout warn">Changing the identity source (for example from the Identity Center directory to Entra ID) can remove existing users, groups and assignments. Treat it as a planned migration, not a toggle.</div>`
+            },
+            {
+              heading: 'Attribute-based access control with session tags',
+              html: `<p>Role-based access control needs a new role or permission set for every project. <strong>ABAC</strong> writes one policy that compares the caller's tags with the resource's tags, so new projects need only new tags.</p>
+<ul>
+<li><strong>Where principal tags come from:</strong> Identity Center <em>attributes for access control</em> (mapped from SAML assertion or SCIM attributes such as <code>costCenter</code>), the <code>PrincipalTag</code> SAML attribute in direct IAM SAML federation, or <code>sts:TagSession</code> on <code>AssumeRole</code>. <strong>Transitive</strong> session tags persist through role chaining.</li>
+<li><strong>Core condition:</strong> <code>"aws:ResourceTag/project": "&#36;{aws:PrincipalTag/project}"</code>.</li>
+<li><strong>Control tagging on create:</strong> require <code>aws:RequestTag/project</code> to equal the principal's tag and limit keys with <code>aws:TagKeys</code>, otherwise users can create untagged or mis-tagged resources.</li>
+<li><strong>Protect the tags:</strong> deny changing or removing the authorization tags on existing resources except for an admin role, or a user can retag a resource into their own project.</li>
+</ul>
+<table><thead><tr><th></th><th>RBAC</th><th>ABAC</th></tr></thead><tbody>
+<tr><td>New project</td><td>New role / permission set and policy</td><td>New tag value only</td></tr>
+<tr><td>Policy count</td><td>Grows with teams × resources</td><td>Small and stable</td></tr>
+<tr><td>Risk</td><td>Policy sprawl</td><td>Tag governance must be enforced</td></tr>
+</tbody></table>`
+            },
+            {
+              heading: 'Customer identities: Cognito user pools vs identity pools',
+              html: `<table><thead><tr><th></th><th>Cognito user pools</th><th>Cognito identity pools</th></tr></thead><tbody>
+<tr><td>Purpose</td><td>User directory and authentication: sign-up, sign-in, MFA, managed login pages</td><td>Authorization to AWS services by issuing <strong>temporary AWS credentials</strong></td></tr>
+<tr><td>Output</td><td>JWTs (ID, access, refresh tokens)</td><td>STS credentials for an IAM role</td></tr>
+<tr><td>Federation</td><td>Social (Google, Apple, Facebook, Amazon), SAML and OIDC IdPs into the pool</td><td>Accepts user pool, social, SAML, OIDC and developer-authenticated identities; optional guest (unauthenticated) access</td></tr>
+<tr><td>Typical integration</td><td>API Gateway Cognito authorizer, ALB authenticate action, AppSync</td><td>Mobile or browser clients calling S3, DynamoDB or IoT directly</td></tr>
+</tbody></table>
+<ul>
+<li>Use them <strong>together</strong>: the user pool authenticates, the identity pool exchanges the token for role credentials.</li>
+<li>Isolate per-user data with the policy variable <code>&#36;{cognito-identity.amazonaws.com:sub}</code> in the authenticated role's policy (for example an S3 prefix per user), and use role-mapping rules or principal tags for ABAC.</li>
+<li>For fine-grained, application-level authorization decisions (who can approve which claim), use <strong>Amazon Verified Permissions</strong> with Cedar policies rather than encoding logic in IAM.</li>
+<li>Multi-tenant B2B SaaS: federate each tenant's SAML/OIDC IdP into a user pool and carry the tenant ID in a claim; choose a pool per tenant only when tenants need very different settings.</li>
+</ul>
+<div class="callout">Cognito is for <strong>application end users</strong>. Workforce access to the AWS console and CLI across accounts is IAM Identity Center.</div>`
+            },
+            {
+              heading: 'Cross-account patterns and delegated admin with permissions boundaries',
+              html: `<ul>
+<li><strong>Hub-and-spoke role assumption:</strong> a tooling or pipeline account assumes a well-known role in each target account; trust policies can trust a whole OU with <code>aws:PrincipalOrgPaths</code> or the org with <code>aws:PrincipalOrgID</code>.</li>
+<li><strong>Role chaining</strong> limits the chained session to a maximum of one hour; use <code>sts:SourceIdentity</code> so CloudTrail shows the original human through the chain.</li>
+<li><strong>IAM Roles Anywhere</strong> gives on-premises workloads temporary credentials using X.509 certificates from a trusted CA (AWS Private CA or your own), removing long-term access keys from servers.</li>
+<li>Third parties: role with <code>sts:ExternalId</code>. Data sharing: resource policies, Lake Formation, or RAM.</li>
+</ul>
+<p><strong>Delegating IAM safely.</strong> App teams often need to create Lambda or ECS task roles. Give them <code>iam:CreateRole</code> and <code>iam:PutRolePolicy</code> only when <code>iam:PermissionsBoundary</code> equals a specific boundary policy ARN, then deny <code>iam:DeleteRolePermissionsBoundary</code>, deny editing the boundary policy itself, restrict role names or paths (for example <code>/app/</code>), and allow <code>iam:PassRole</code> only for roles on that path.</p>
+<div class="callout">Effective permissions are the <strong>intersection</strong> of identity policy, permissions boundary, SCP and any session policy. A boundary never grants anything; it caps what the team's roles can ever do, so a developer cannot create a role more powerful than the boundary.</div>`
+            },
+            {
+              heading: 'Reference scenario',
+              html: `<p><strong>Scenario:</strong> a retailer with 400 accounts uses Entra ID. App teams wait days for central IAM tickets to create Lambda roles, access is granted per project with 300 permission sets, and a new customer mobile app must let shoppers upload receipts to S3.</p>
+<ul>
+<li>Identity Center (delegated admin in an Identity account) with Entra ID over SAML and SCIM; attributes for access control map <code>project</code> and <code>costCenter</code> to session tags; 300 permission sets collapse into a few ABAC permission sets.</li>
+<li>The <code>AppDeveloper</code> permission set allows IAM role creation only with the mandatory permissions boundary and only under <code>/app/</code>; an SCP denies removing boundaries organization-wide.</li>
+<li>The mobile app uses a Cognito user pool (email plus Apple/Google sign-in) and an identity pool whose authenticated role allows <code>s3:PutObject</code> only under the caller's own identity prefix.</li>
+</ul>`
+            }
+          ],
+          keyPoints: [
+            `Identity Center + external IdP = SAML 2.0 for sign-in, SCIM for provisioning; one identity source per instance.`,
+            `Customer managed policies in a permission set must exist by name in every target account.`,
+            `ABAC compares aws:PrincipalTag with aws:ResourceTag; also control aws:RequestTag on create and protect tags from modification.`,
+            `Cognito user pools authenticate and issue JWTs; identity pools exchange tokens for temporary AWS credentials.`,
+            `Permissions boundaries plus an iam:PermissionsBoundary condition let teams create roles without privilege escalation.`,
+            `Role chaining sessions last at most one hour; IAM Roles Anywhere removes access keys from on-premises servers.`
+          ],
+          examTips: [
+            `If permissions must scale to many projects "without creating new roles or permission sets", think ABAC with session tags.`,
+            `If an app's users sign in with social providers and then call S3 or DynamoDB directly, think user pool + identity pool.`,
+            `If developers must create IAM roles but must not exceed a defined set of permissions, think permissions boundary enforced by an iam:PermissionsBoundary condition.`,
+            `If a permission set fails to provision in some accounts, check whether its customer managed policy exists in those accounts.`,
+            `If on-premises servers use long-term access keys, think IAM Roles Anywhere.`
+          ],
+          services: ['IAM Identity Center', 'IAM', 'AWS STS', 'Amazon Cognito', 'Amazon Verified Permissions', 'IAM Roles Anywhere', 'AWS Organizations']
+        },
+        {
+          id: 'p-hybrid-edge',
+          title: 'Hybrid & Edge Architectures: Outposts, Local Zones, Wavelength, Storage Gateway & Hybrid DNS',
+          minutes: 17,
+          summary: `Decide where AWS infrastructure should physically run, design Outposts for disconnection, choose the right Storage Gateway type, and keep DNS working across Region, edge and data center.`,
+          sections: [
+            {
+              heading: 'Choosing where AWS runs',
+              html: `<table><thead><tr><th>Option</th><th>Location</th><th>Use when</th><th>Watch out for</th></tr></thead><tbody>
+<tr><td>Outposts racks</td><td>Your data center</td><td>Low latency to on-premises systems, local data processing, data residency, apps that must stay next to on-prem dependencies</td><td>Needs a service link to its parent Region; capacity fixed at order time</td></tr>
+<tr><td>Outposts servers (1U/2U)</td><td>Branches, stores, factories</td><td>Small-footprint local compute</td><td>Smaller service set; instance storage</td></tr>
+<tr><td>Local Zones</td><td>AWS-operated metro locations</td><td>Single-digit-millisecond latency to end users in a metro (rendering, gaming, real-time media); some residency needs</td><td>Opt-in; subset of services; Dedicated Local Zones for sovereign requirements</td></tr>
+<tr><td>Wavelength Zones</td><td>Inside telecom 5G networks</td><td>Ultra-low latency to mobile and connected devices</td><td>Reached through a carrier gateway from the carrier network</td></tr>
+<tr><td>Snowball Edge</td><td>Disconnected or rugged sites</td><td>Edge compute and data collection without reliable connectivity</td><td>Not a continuously connected extension of a Region</td></tr>
+<tr><td>ECS Anywhere / EKS Anywhere / EKS Hybrid Nodes</td><td>Your own hardware</td><td>Run containers on existing servers with AWS tooling</td><td>You own hardware, capacity and its availability</td></tr>
+</tbody></table>
+<p>Local Zones and Wavelength Zones appear as extra zones of a parent Region: you extend a VPC by creating subnets in them. Outposts also extend a VPC – a subnet is created on the Outpost.</p>`
+            },
+            {
+              heading: 'Designing Outposts',
+              html: `<ul>
+<li>The <strong>service link</strong> is an encrypted connection back to the parent Region that carries management (control plane) traffic and intra-VPC traffic to the Region. Provide redundant uplinks (for example Direct Connect plus a second path).</li>
+<li>If the service link is lost, <strong>running instances keep running</strong> and local traffic continues, but you cannot launch or modify resources. Design for <strong>static stability</strong>: provision spare capacity on the Outpost in advance instead of relying on scaling during an outage.</li>
+<li>The <strong>local gateway</strong> connects Outposts racks to your on-premises network; customer-owned IP (CoIP) pools give instances addresses routable on-premises.</li>
+<li>Services on Outposts racks include EC2, EBS, S3 on Outposts, ECS, EKS, RDS, ElastiCache, EMR and ALB. <strong>EKS local clusters</strong> run the Kubernetes control plane on the Outpost so clusters tolerate disconnection.</li>
+<li>An Outpost is a single fault domain, much like one Availability Zone. For high availability use two Outposts (anchored to different AZs) or fail over to the Region.</li>
+</ul>
+<div class="callout">There is no "EC2 Anywhere": running genuine EC2 instances on premises means Outposts. For your own servers, use Systems Manager hybrid activations (management), ECS Anywhere or EKS Hybrid Nodes (containers), and IAM Roles Anywhere (credentials).</div>`
+            },
+            {
+              heading: 'Storage Gateway variants',
+              html: `<table><thead><tr><th>Type</th><th>Protocol</th><th>Data stored in</th><th>Fits</th></tr></thead><tbody>
+<tr><td>S3 File Gateway</td><td>NFS, SMB</td><td>S3 objects (one file = one object) with a local cache</td><td>File shares whose data should also be usable natively in S3 (analytics, lifecycle, archive)</td></tr>
+<tr><td>Volume Gateway – cached</td><td>iSCSI</td><td>S3-backed volumes, hot data cached locally</td><td>Primary block data in AWS, local low-latency access to recent data</td></tr>
+<tr><td>Volume Gateway – stored</td><td>iSCSI</td><td>Full dataset on premises; asynchronous point-in-time snapshots to AWS as EBS snapshots</td><td>Keep all data local, use AWS for backup and DR</td></tr>
+<tr><td>Tape Gateway</td><td>iSCSI virtual tape library</td><td>Virtual tapes in S3, archived to S3 Glacier Flexible Retrieval or Glacier Deep Archive</td><td>Replace physical tape without changing backup software</td></tr>
+</tbody></table>
+<ul>
+<li>Gateways run as a VM (VMware, Hyper-V, KVM) or on EC2; size the cache for the working set.</li>
+<li>Objects written to the bucket directly (not through the gateway) appear in the share only after a cache refresh (<code>RefreshCache</code>, which can be automated).</li>
+<li>Amazon FSx File Gateway is no longer available to new customers; for new designs, access FSx for Windows File Server directly over DX/VPN.</li>
+</ul>`
+            },
+            {
+              heading: 'Hybrid DNS across Region, edge and data center',
+              html: `<ul>
+<li>Subnets in Local Zones, Wavelength Zones and on Outposts belong to the parent VPC, so they use the same VPC Resolver, private hosted zones and Resolver rules as Region subnets.</li>
+<li>Centralize <strong>inbound and outbound Resolver endpoints</strong> in a network account (multiple AZs), conditionally forward on-premises zones out and AWS zones in, and share forwarding rules or <strong>Route 53 Profiles</strong> with every VPC.</li>
+<li>Avoid circular dependencies: on-premises resolvers must not forward AWS zones back to an endpoint that forwards them on-premises again.</li>
+<li>Edge sites that must survive WAN loss need local DNS resolvers or caching for the names they depend on – a cloud-only resolver path is a hidden single point of failure.</li>
+</ul>
+<div class="callout warn">A low-latency edge deployment is pointless if every request still makes a DNS lookup or database call back to the Region. Check the whole request path, not just where compute runs.</div>`
+            },
+            {
+              heading: 'Reference scenario',
+              html: `<p><strong>Scenario:</strong> a manufacturer runs a manufacturing execution system (MES) that needs sub-10 ms latency to shop-floor controllers in 12 plants, must keep production data in-country, still backs up to physical tape, and engineers share CAD files over SMB.</p>
+<ul>
+<li>Outposts servers in each plant for the MES front end, with spare capacity pre-provisioned so the plant keeps running if the service link drops; an Outposts rack in the main data center hosts RDS on Outposts for residency.</li>
+<li>Aggregated, anonymized telemetry flows to the Region for analytics.</li>
+<li>Tape Gateway replaces the tape library without changing the backup software; S3 File Gateway serves CAD shares with S3 lifecycle to colder tiers.</li>
+<li>Central Resolver endpoints and a Route 53 Profile give every VPC (including Outposts subnets) the same view of <code>corp.example</code> and AWS private zones; each plant keeps a local caching resolver.</li>
+</ul>`
+            }
+          ],
+          keyPoints: [
+            `Outposts = AWS infrastructure in your facility, controlled from a parent Region over the service link.`,
+            `Losing the service link keeps running workloads up but blocks control-plane changes, so pre-provision capacity.`,
+            `Local Zones bring AWS close to metro end users; Wavelength puts it inside 5G carrier networks.`,
+            `S3 File Gateway (NFS/SMB to S3), Volume Gateway cached or stored (iSCSI), Tape Gateway (VTL to Glacier tiers).`,
+            `ECS Anywhere, EKS Anywhere and EKS Hybrid Nodes run containers on your own hardware; there is no EC2 Anywhere.`,
+            `Edge subnets use the parent VPC's DNS; design local resolution for sites that must survive WAN loss.`
+          ],
+          examTips: [
+            `If workloads must run in the company's own data center with the same AWS APIs, think Outposts, not Local Zones.`,
+            `If users in a specific city need single-digit-millisecond latency and no Region is nearby, think Local Zones.`,
+            `If the latency target is to mobile devices on a 5G network, think Wavelength.`,
+            `If existing backup software writes to tape and must keep doing so, think Tape Gateway.`,
+            `If on-premises apps need SMB/NFS access to data that must also be processed in S3, think S3 File Gateway.`
+          ],
+          services: ['AWS Outposts', 'AWS Local Zones', 'AWS Wavelength', 'AWS Storage Gateway', 'Amazon ECS Anywhere', 'Amazon EKS Anywhere', 'Amazon Route 53 Resolver']
         }
       ]
     },
@@ -458,7 +631,7 @@ window.TRACKS.sap = {
 <ul>
 <li>API Gateway → SQS FIFO with <code>MessageGroupId = customerId</code> (high-throughput mode) for ordering per customer while allowing parallelism across customers.</li>
 <li>Lambda consumers with idempotent conditional writes to DynamoDB; partial batch responses and a DLQ.</li>
-<li>Order-placed events published to EventBridge; rules route to fulfillment (Step Functions Standard with a saga for payment and shipping), analytics (Kinesis Data Firehose to S3) and a partner bus in another account.</li>
+<li>Order-placed events published to EventBridge; rules route to fulfillment (Step Functions Standard with a saga for payment and shipping), analytics (Amazon Data Firehose to S3) and a partner bus in another account.</li>
 </ul>`
             }
           ],
@@ -616,6 +789,190 @@ window.TRACKS.sap = {
             `If logs must be immutable even for root, think S3 Object Lock in compliance mode.`
           ],
           services: ['AWS KMS', 'AWS CloudHSM', 'AWS Security Hub', 'Amazon GuardDuty', 'AWS CloudTrail', 'Amazon Security Lake', 'Amazon S3 Object Lock', 'Amazon Inspector']
+        },
+        {
+          id: 'p-data-analytics',
+          title: 'Data Lakes & Analytics Platforms at Scale: Lake Formation, Glue, Athena, EMR, Redshift & Streaming',
+          minutes: 20,
+          summary: `Build a governed data lake on S3, share it across accounts with fine-grained control, and pick the right query, processing, warehousing and streaming services for each workload.`,
+          sections: [
+            {
+              heading: 'Lake house building blocks',
+              html: `<table><thead><tr><th>Layer</th><th>Service</th><th>Role</th></tr></thead><tbody>
+<tr><td>Storage</td><td>Amazon S3 (raw / curated / consumption zones); open table formats such as Apache Iceberg, including S3 Tables</td><td>Durable, cheap, decoupled from compute</td></tr>
+<tr><td>Catalog</td><td>AWS Glue Data Catalog (crawlers or explicit DDL)</td><td>Shared metadata for Athena, EMR, Glue, Redshift Spectrum</td></tr>
+<tr><td>Governance</td><td>AWS Lake Formation</td><td>Database/table/column/row/cell permissions, LF-Tags, cross-account sharing</td></tr>
+<tr><td>Batch ingest &amp; ETL</td><td>AWS Glue (serverless Spark), AWS DMS, DataSync, Amazon AppFlow</td><td>Land and transform data</td></tr>
+<tr><td>Streaming ingest</td><td>Kinesis Data Streams, Amazon MSK, Amazon Data Firehose</td><td>Continuous ingestion</td></tr>
+<tr><td>Processing</td><td>Amazon EMR (on EC2, on EKS, Serverless), Amazon Managed Service for Apache Flink</td><td>Large-scale Spark/Hive/Trino and stateful stream processing</td></tr>
+<tr><td>Query &amp; warehouse</td><td>Amazon Athena, Amazon Redshift</td><td>Ad hoc SQL on S3; high-concurrency BI warehouse</td></tr>
+<tr><td>BI / ML</td><td>Amazon QuickSight, Amazon SageMaker (unified studio) and Amazon SageMaker AI</td><td>Dashboards, ML on the governed data</td></tr>
+</tbody></table>
+<p>Glue features that show up in scenarios: <strong>job bookmarks</strong> for incremental processing, <strong>Glue Data Quality</strong> rules, Glue Schema Registry for streaming schemas, and Glue DataBrew for no-code preparation.</p>`
+            },
+            {
+              heading: 'Governance and sharing with Lake Formation',
+              html: `<ul>
+<li><strong>Register</strong> S3 locations with Lake Formation; integrated engines (Athena, Redshift Spectrum, EMR, Glue) receive temporary, scoped credentials from Lake Formation instead of needing broad S3 permissions.</li>
+<li><strong>Fine-grained access:</strong> column-level permissions, plus <strong>data filters</strong> for row-level and cell-level security.</li>
+<li><strong>LF-Tags (tag-based access control):</strong> tag databases, tables and columns (for example <code>confidentiality=pii</code>, <code>domain=claims</code>) and grant on tag expressions – scales far better than granting on hundreds of named tables.</li>
+<li><strong>Cross-account sharing:</strong> grant to another account, OU or the organization; Lake Formation uses AWS RAM under the hood. The consumer's data lake administrator re-grants to local principals and creates <strong>resource links</strong> so the shared tables appear in the local catalog.</li>
+<li><strong>Data mesh pattern:</strong> producer accounts own data, a central governance account holds the catalog and permissions, consumer accounts query with their own compute.</li>
+<li><strong>Hybrid access mode</strong> lets existing IAM/S3-policy access continue while you onboard tables to Lake Formation permissions gradually.</li>
+</ul>
+<div class="callout warn">Out of the box, the Data Catalog grants access through the <code>IAMAllowedPrincipals</code> group ("use only IAM access control"). Until you remove that default for a database or table, Lake Formation fine-grained permissions are not actually enforced.</div>`
+            },
+            {
+              heading: 'Query and processing engines',
+              html: `<table><thead><tr><th>Engine</th><th>Best for</th><th>Cost model</th></tr></thead><tbody>
+<tr><td>Athena</td><td>Serverless, ad hoc SQL on S3; federated queries through Lambda connectors; Iceberg tables with ACID and time travel</td><td>Per data scanned, or provisioned capacity</td></tr>
+<tr><td>AWS Glue ETL</td><td>Serverless Spark/Python ETL with catalog integration</td><td>Per DPU-hour</td></tr>
+<tr><td>Amazon EMR</td><td>Large or custom Spark, Hive, Presto/Trino, HBase; full framework control</td><td>Instances (EC2/EKS) or per-use (Serverless)</td></tr>
+<tr><td>Redshift</td><td>High-concurrency BI and complex joins on curated data</td><td>Nodes (provisioned) or RPU-hours (Serverless)</td></tr>
+</tbody></table>
+<ul>
+<li><strong>Athena performance and cost:</strong> convert to columnar <strong>Parquet/ORC</strong> with compression, partition by common filters (for example date), use <strong>partition projection</strong> for highly partitioned tables, compact many small files, and set <strong>workgroup data usage controls</strong> to cancel runaway queries.</li>
+<li><strong>EMR cost:</strong> transient clusters per job, S3 (EMRFS) as the durable store instead of HDFS, <strong>Spot for task nodes</strong>, instance fleets with diversified types; EMR Serverless removes cluster sizing.</li>
+</ul>`
+            },
+            {
+              heading: 'Amazon Redshift at scale',
+              html: `<ul>
+<li><strong>RA3 nodes</strong> separate compute from <strong>Redshift managed storage</strong>, so you scale compute without buying storage; <strong>Redshift Serverless</strong> removes node management entirely.</li>
+<li><strong>Data sharing</strong> gives live, transactionally consistent read access to data in another cluster or workgroup – across accounts and Regions – <strong>without copying</strong>. Producers and consumers must be RA3 or Serverless; consumers pay for their own compute, which isolates workloads.</li>
+<li><strong>Redshift Spectrum</strong> queries data in S3 through an external schema in the Glue Data Catalog, so cold history stays in the lake while hot data lives in the warehouse.</li>
+<li><strong>Concurrency scaling</strong> adds transient capacity for bursts of queries; workload management prioritizes queues; materialized views precompute expensive joins.</li>
+<li><strong>Zero-ETL integrations</strong> replicate data from sources such as Aurora MySQL, Aurora PostgreSQL, RDS for MySQL and DynamoDB (and some SaaS applications) into Redshift in near real time with no pipeline to build or operate.</li>
+<li><strong>Streaming ingestion</strong> reads Kinesis Data Streams or MSK directly into materialized views.</li>
+</ul>
+<div class="callout">Copying data into each business unit's warehouse creates stale, inconsistent copies and storage cost. When the requirement says "live", "without copying" or "isolate compute per team", the answer is Redshift data sharing.</div>`
+            },
+            {
+              heading: 'Streaming ingestion choices',
+              html: `<table><thead><tr><th>Service</th><th>Strength</th><th>Choose when</th></tr></thead><tbody>
+<tr><td>Kinesis Data Streams</td><td>Ordered per shard, multiple consumers, replay (retention extendable up to a year); on-demand or provisioned</td><td>You write custom consumers or need replay and fan-out</td></tr>
+<tr><td>Amazon Data Firehose</td><td>Fully managed delivery to S3, Redshift, OpenSearch, Splunk, HTTP endpoints and Iceberg tables; buffering, Lambda transformation, Parquet/ORC conversion, dynamic partitioning</td><td>"Load streaming data into a destination with no code to manage"; near-real-time is acceptable</td></tr>
+<tr><td>Amazon MSK (provisioned or Serverless)</td><td>Apache Kafka APIs and ecosystem; MSK Connect for connectors</td><td>Existing Kafka producers/consumers or Kafka-specific features</td></tr>
+<tr><td>Managed Service for Apache Flink</td><td>Stateful processing, windows, joins, exactly-once state</td><td>Real-time aggregation, anomaly detection, enrichment</td></tr>
+</tbody></table>
+<p>Firehose was renamed from Kinesis Data Firehose to <strong>Amazon Data Firehose</strong>, and Kinesis Data Analytics is now <strong>Amazon Managed Service for Apache Flink</strong>; exam answers may use either name.</p>`
+            },
+            {
+              heading: 'Reference scenario',
+              html: `<p><strong>Scenario:</strong> an insurer has 12 business units, each with its own AWS account and data. The CDO wants one governed catalog, PII columns visible only to approved analysts, finance and actuarial teams querying the same warehouse tables without copies, and near-real-time policy data from Aurora in the warehouse.</p>
+<ul>
+<li>A central governance account runs Lake Formation with LF-Tags (<code>domain</code>, <code>confidentiality</code>); producer accounts register their S3 locations; grants on tag expressions are shared to consumer accounts, which create resource links.</li>
+<li>Data filters hide PII columns and restrict rows by region for most analysts; Athena and EMR consumers use their own accounts' compute.</li>
+<li>Clickstream arrives through Amazon Data Firehose, converted to Parquet and dynamically partitioned by date; claims events flow through MSK and Managed Service for Apache Flink into Iceberg tables.</li>
+<li>A Redshift RA3 producer uses an Aurora zero-ETL integration for policy data and shares it with finance and actuarial Redshift Serverless consumers through data sharing; Spectrum covers seven years of history in S3.</li>
+</ul>`
+            }
+          ],
+          keyPoints: [
+            `Lake Formation adds column, row and cell-level permissions and LF-Tag based grants on top of the Glue Data Catalog.`,
+            `Cross-account lake sharing uses Lake Formation grants (via RAM) plus resource links in the consumer account.`,
+            `Athena cost scales with data scanned: Parquet/ORC, compression, partitioning and workgroup limits.`,
+            `Redshift RA3/Serverless enable data sharing: live, cross-account, no copies, separate consumer compute.`,
+            `Zero-ETL integrations move Aurora, RDS for MySQL and DynamoDB data into Redshift without pipelines.`,
+            `Data Firehose = managed delivery with transformation and format conversion; KDS = custom consumers and replay; MSK = Kafka.`
+          ],
+          examTips: [
+            `If the requirement is column- or row-level access to S3 data across accounts, think Lake Formation (data filters, LF-Tags), not bucket policies.`,
+            `If Athena queries are slow and expensive on CSV, think Parquet + partitioning (Glue ETL or CTAS).`,
+            `If several teams need live access to the same warehouse data with isolated compute, think Redshift data sharing.`,
+            `If streaming data must land in S3 as partitioned Parquet with no custom code, think Amazon Data Firehose.`,
+            `If the source is Aurora and the target is Redshift with "no ETL pipeline to manage", think zero-ETL integration.`
+          ],
+          services: ['AWS Lake Formation', 'AWS Glue', 'Amazon Athena', 'Amazon EMR', 'Amazon Redshift', 'Amazon Kinesis Data Streams', 'Amazon Data Firehose', 'Amazon MSK', 'Amazon Managed Service for Apache Flink']
+        },
+        {
+          id: 'p-resilience-engineering',
+          title: 'Resilience Engineering: Route 53 ARC, Cell-Based Architecture, Shuffle Sharding & Static Stability',
+          minutes: 18,
+          summary: `Design systems whose recovery does not depend on the things that are failing, contain blast radius with cells and shuffle sharding, and prove it with Resilience Hub and FIS.`,
+          sections: [
+            {
+              heading: 'Control planes, data planes and static stability',
+              html: `<p>A <strong>control plane</strong> changes the system (launch an instance, update a DNS record, create a load balancer). A <strong>data plane</strong> delivers the service (a running instance serving requests, Route 53 answering queries). Data planes are simpler and far more available than control planes.</p>
+<ul>
+<li><strong>Static stability:</strong> the system keeps working through an impairment <em>without</em> control-plane actions – capacity already running in surviving AZs or Regions, credentials and configuration already in place.</li>
+<li>Pre-provision capacity for the loss of one AZ (for example, size each of three AZs at 50% of peak) rather than relying on Auto Scaling during the event.</li>
+<li>Avoid <strong>bimodal behavior</strong>: paths used only during failure (a cold cache, a never-tested fallback) tend to fail when needed. The <strong>constant work</strong> pattern does the same amount of work whether healthy or not.</li>
+<li>Failover mechanisms should rely on data-plane operations: health checks, routing controls, Global Accelerator dials.</li>
+</ul>`
+            },
+            {
+              heading: 'Route 53 Application Recovery Controller',
+              html: `<table><thead><tr><th>Capability</th><th>Scope</th><th>What it does</th><th>Design notes</th></tr></thead><tbody>
+<tr><td>Zonal shift</td><td>AZ</td><td>Operator temporarily moves traffic away from one AZ for supported resources (for example ALB, NLB, EC2 Auto Scaling groups, EKS)</td><td>Has an expiry you set and can extend; remaining AZs need the capacity</td></tr>
+<tr><td>Zonal autoshift</td><td>AZ</td><td>AWS shifts traffic away automatically when it detects an AZ impairment, and shifts it back afterward</td><td>Configure practice runs with outcome alarms to prove the remaining AZs can cope</td></tr>
+<tr><td>Routing controls</td><td>Region or cell</td><td>On/off switches tied to Route 53 health checks, hosted on a cluster of five Regional endpoints</td><td>Safety rules: <strong>assertion rules</strong> (for example at least one Region On) and <strong>gating rules</strong> (a master switch)</td></tr>
+<tr><td>Region switch</td><td>Region</td><td>Executes a pre-authored plan of failover steps (for example Aurora Global Database failover, scaling the standby, routing changes) from the healthy Region</td><td>Plans must be authored, kept current and rehearsed</td></tr>
+</tbody></table>
+<div class="callout">Change routing control states through the cluster's data-plane endpoints and retry across them; never make your Region evacuation depend on console access or a control plane in the impaired Region.</div>`
+            },
+            {
+              heading: 'Cells and shuffle sharding',
+              html: `<p><strong>Cell-based architecture</strong> runs many complete, independent copies (cells) of a workload, each serving a subset of customers selected by a partition key such as customer ID. A thin, highly available <strong>cell router</strong> maps customers to cells.</p>
+<ul>
+<li>A failure, bad deployment or poison request affects only one cell's customers; deploy changes <strong>cell by cell</strong> in waves.</li>
+<li>Cap each cell at a size you have load-tested; grow by adding cells, not by enlarging them.</li>
+<li>Keep the router as simple as possible (for example a lookup table in DynamoDB or DNS), because it is shared by everything.</li>
+</ul>
+<p><strong>Shuffle sharding</strong> assigns each customer a random combination of workers. With 8 workers and shards of 2, there are 28 unique combinations, so a customer whose requests crash workers takes down only its own pair, and most other customers share at most one worker with it and can retry on the other.</p>
+<table><thead><tr><th>Approach</th><th>Blast radius of one bad customer</th></tr></thead><tbody>
+<tr><td>Shared fleet</td><td>Everyone</td></tr>
+<tr><td>Simple sharding (fixed groups)</td><td>Everyone in that shard</td></tr>
+<tr><td>Shuffle sharding</td><td>Only customers with the identical combination; others degrade partially at most</td></tr>
+<tr><td>Cells</td><td>One cell's customers, including shared databases and dependencies inside the cell</td></tr>
+</tbody></table>`
+            },
+            {
+              heading: 'Failure-handling patterns',
+              html: `<ul>
+<li><strong>Timeouts everywhere</strong>, set below the caller's own timeout.</li>
+<li><strong>Retries with capped exponential backoff and jitter</strong> spread retries out so clients do not synchronize into waves; AWS SDK standard and adaptive retry modes implement this.</li>
+<li><strong>Retry at one layer</strong> only: retries at every layer multiply (three layers of three retries = 27 attempts on the bottom dependency).</li>
+<li><strong>Retry budgets / token buckets</strong> and <strong>circuit breakers</strong> stop retrying a dependency that is clearly down.</li>
+<li><strong>Load shedding</strong> rejects excess work early (HTTP 429/503) so the requests you accept still succeed; API Gateway throttling and SQS buffering are common tools.</li>
+<li><strong>Idempotency tokens</strong> make retries safe; <strong>bulkheads</strong> separate thread pools or connection pools per dependency.</li>
+</ul>`
+            },
+            {
+              heading: 'Proving resilience: Resilience Hub and FIS',
+              html: `<ul>
+<li><strong>AWS Resilience Hub</strong>: define a resiliency policy with RTO/RPO per disruption type (application, infrastructure, AZ, Region), import the app from CloudFormation, Terraform state, EKS, AppRegistry or resource groups, and get assessments, recommendations, suggested alarms, SOPs and FIS experiments. Run assessments in CI/CD to catch resilience drift.</li>
+<li><strong>AWS FIS</strong>: experiment templates with actions, targets and CloudWatch-alarm stop conditions; the <strong>scenario library</strong> includes AZ power interruption and cross-Region connectivity disruption; multi-account experiments run from a central account; a safety lever can halt experiments in an account.</li>
+<li>Run game days: rehearse zonal shifts and Region switch plans regularly, not only when something breaks.</li>
+</ul>`
+            },
+            {
+              heading: 'Reference scenario',
+              html: `<p><strong>Scenario:</strong> a multi-tenant payments API had two incidents: one tenant's malformed batch crashed every worker, and a bad deployment took down all customers at once. An AZ impairment also degraded latency for 40 minutes.</p>
+<ul>
+<li>Split the platform into cells (each with its own ECS services and DynamoDB tables), with a thin router reading a tenant-to-cell mapping table; deployments roll out one cell at a time with alarms gating each wave.</li>
+<li>Inside each cell, shuffle-shard tenants across worker groups so a poison tenant affects only its own combination.</li>
+<li>Run each AZ at enough capacity to lose one AZ (static stability) and enable zonal autoshift on the load balancers; use ARC routing controls with an assertion rule to evacuate a Region.</li>
+<li>Capped exponential backoff with jitter in clients, retries only at the edge, circuit breakers to the card network; Resilience Hub assessments in the pipeline and quarterly FIS AZ power interruption game days.</li>
+</ul>`
+            }
+          ],
+          keyPoints: [
+            `Static stability: survive impairments using pre-provisioned capacity and data-plane mechanisms only.`,
+            `Zonal shift (manual) and zonal autoshift (AWS-initiated) move traffic away from an impaired AZ.`,
+            `ARC routing controls with assertion and gating safety rules give a reliable, operator-driven Region switch.`,
+            `Cells contain blast radius per customer subset; deploy cell by cell behind a thin router.`,
+            `Shuffle sharding gives each customer a unique combination of workers, isolating poison tenants.`,
+            `Use timeouts, capped exponential backoff with jitter, retry at one layer, circuit breakers and load shedding.`
+          ],
+          examTips: [
+            `If one tenant's bad requests take down all tenants, think shuffle sharding or cells.`,
+            `If a bad deployment must affect only a small fraction of customers, think cell-based architecture with wave deployments.`,
+            `If retries amplify an outage, think exponential backoff with jitter, retry budgets and circuit breakers – not more retries.`,
+            `If a multi-step cross-Region failover (database, scaling, routing) must be orchestrated and rehearsed, think ARC Region switch.`,
+            `If capacity is added only after a failure is detected, the design is not statically stable.`
+          ],
+          services: ['Amazon Route 53 Application Recovery Controller', 'AWS Resilience Hub', 'AWS Fault Injection Service', 'Elastic Load Balancing', 'Amazon EC2 Auto Scaling', 'Amazon DynamoDB']
         }
       ]
     },
@@ -891,6 +1248,88 @@ window.TRACKS.sap = {
             `If rollback must be instant without redeploying, think blue/green or feature flags.`
           ],
           services: ['AWS CodeDeploy', 'AWS CodePipeline', 'AWS CloudFormation StackSets', 'AWS AppConfig', 'Amazon ECS', 'AWS Lambda', 'Amazon RDS Blue/Green Deployments']
+        },
+        {
+          id: 'p-operations-at-scale',
+          title: 'Operations at Organization Scale: Cross-Account Observability, Central Logging, Config & Systems Manager',
+          minutes: 18,
+          summary: `Run hundreds of accounts like one estate: a monitoring account per Region, a tamper-resistant log archive, organization-wide compliance views, and fleet operations through Systems Manager.`,
+          sections: [
+            {
+              heading: 'Centralized observability',
+              html: `<ul>
+<li><strong>CloudWatch cross-account observability</strong> (Observability Access Manager): create a <strong>sink</strong> in a monitoring account and <strong>links</strong> from source accounts. The monitoring account can then search logs, view metrics and alarms, and follow X-Ray traces and Application Signals across accounts without copying data.</li>
+<li>It is configured <strong>per Region</strong>; onboard every account (including future ones) through an Organizations-wide setup or a service-managed StackSet.</li>
+<li>Cross-account, cross-Region <strong>dashboards</strong> combine widgets from many accounts; Amazon Managed Grafana can query CloudWatch, Prometheus and other sources across accounts.</li>
+<li><strong>AWS Health organizational view</strong> aggregates Health events for all accounts, and EventBridge rules can route them to the right teams.</li>
+</ul>`
+            },
+            {
+              heading: 'Centralized logging into a Log Archive account',
+              html: `<table><thead><tr><th>Log source</th><th>Delivery pattern</th><th>Destination</th></tr></thead><tbody>
+<tr><td>CloudTrail</td><td>Organization trail</td><td>Log Archive S3 bucket (optionally also a CloudTrail Lake event data store)</td></tr>
+<tr><td>AWS Config</td><td>Delivery channel in every account/Region</td><td>Log Archive bucket; aggregator in the security or audit account</td></tr>
+<tr><td>VPC Flow Logs</td><td>Publish directly to a central bucket (cross-account bucket policy)</td><td>Log Archive bucket</td></tr>
+<tr><td>Application logs in CloudWatch Logs</td><td>Subscription filters or account-level subscription filter policies to a <strong>cross-account destination</strong> (Kinesis Data Streams or Amazon Data Firehose), or the newer CloudWatch Logs centralization rules</td><td>Firehose to the Log Archive bucket and/or OpenSearch</td></tr>
+<tr><td>ALB, CloudFront, WAF logs</td><td>Native delivery (WAF can also use Firehose)</td><td>Log Archive bucket</td></tr>
+<tr><td>Security telemetry</td><td>Amazon Security Lake</td><td>OCSF-normalized data lake for SIEM subscribers</td></tr>
+</tbody></table>
+<ul>
+<li>Protect the archive: S3 Object Lock (compliance mode for strict WORM), SSE-KMS with a key policy limited to log writers and readers, a bucket policy using <code>aws:SourceOrgID</code> for service deliveries, and SCPs denying changes to trails, Config and the bucket.</li>
+<li>Lifecycle older logs to Glacier storage classes; query with Athena using partition projection.</li>
+</ul>
+<div class="callout warn">CloudWatch Logs export tasks are batch, one-at-a-time jobs – fine for occasional archiving, wrong for "near-real-time centralization from hundreds of accounts". Use subscriptions to a cross-account destination.</div>`
+            },
+            {
+              heading: 'Auditing at scale: CloudTrail Lake and Config aggregators',
+              html: `<ul>
+<li><strong>CloudTrail Lake</strong> stores events in <strong>event data stores</strong> (organization-wide when created from the management or delegated admin account) and lets investigators run SQL directly, with multi-year retention options. It can also ingest Config configuration items and events from outside AWS. Compared with Athena over trail files in S3 it needs no table or partition management, at a higher price. Check current availability and pricing before standardizing on it for a new design.</li>
+<li><strong>AWS Config aggregators</strong>: an <strong>organization aggregator</strong> in the management or a delegated admin account gives a read-only, multi-account, multi-Region view of resource inventory and rule compliance. <strong>Advanced queries</strong> run SQL-like queries over current configuration across the aggregator.</li>
+<li>Deploy rules everywhere with <strong>organization Config rules</strong> and <strong>organization conformance packs</strong>; attach <strong>remediation</strong> through Systems Manager Automation documents.</li>
+<li>Config detects; it does not prevent. Pair it with SCPs/RCPs and CloudFormation Hooks for prevention.</li>
+</ul>`
+            },
+            {
+              heading: 'Systems Manager across the organization',
+              html: `<table><thead><tr><th>Capability</th><th>Purpose</th><th>How it scales</th></tr></thead><tbody>
+<tr><td>Quick Setup</td><td>Configure Systems Manager features with recommended defaults</td><td>Targets the organization, OUs and Regions from the management or delegated admin account</td></tr>
+<tr><td>Default Host Management Configuration</td><td>Makes EC2 instances managed without attaching an instance profile to each</td><td>Account/Region setting, deployable via Quick Setup</td></tr>
+<tr><td>State Manager</td><td>Keeps instances in a desired state (agents installed, configuration applied) on a schedule</td><td>Associations target tags or resource groups, so new instances are covered automatically</td></tr>
+<tr><td>Patch Manager</td><td>Patch baselines, scanning and installation, compliance reporting</td><td><strong>Patch policies</strong> through Quick Setup across accounts and Regions; maintenance windows for timing</td></tr>
+<tr><td>Automation</td><td>Runbooks for remediation and routine operations</td><td><strong>Multi-account, multi-Region execution</strong> using an administration role in the central account and execution roles in targets, with concurrency and error thresholds</td></tr>
+<tr><td>Inventory + Resource Data Sync</td><td>Software and configuration inventory</td><td>Sync from all accounts to a central S3 bucket; query with Athena</td></tr>
+<tr><td>Explorer and OpsCenter</td><td>Aggregated operational data and OpsItems (issues to investigate)</td><td>Multi-account view via delegated admin / resource data sync</td></tr>
+<tr><td>Incident Manager</td><td>Response plans, escalation and engagement, runbooks</td><td>High-level knowledge is enough for the exam</td></tr>
+</tbody></table>
+<div class="callout">AWS has been consolidating Systems Manager into a unified, organization-aware console and has changed the availability of some older capabilities for new customers. The patterns above – desired state, patch policies, multi-account Automation – are what the exam tests.</div>`
+            },
+            {
+              heading: 'Reference scenario',
+              html: `<p><strong>Scenario:</strong> a company with 250 accounts in six Regions has inconsistent patching, logs scattered across accounts, and auditors asking "who changed this security group three years ago?".</p>
+<ul>
+<li>A monitoring account per Region with OAM links to every account, created through a service-managed StackSet so new accounts are linked automatically.</li>
+<li>Account-level subscription filter policies send application logs to Firehose destinations in the Log Archive account, landing in an Object Lock bucket; the organization trail and Config deliver there too.</li>
+<li>A CloudTrail Lake organization event data store in the security account answers historical SQL questions; an organization Config aggregator with advanced queries shows current compliance.</li>
+<li>Quick Setup patch policies apply baselines in every account and Region; State Manager keeps the CloudWatch agent configured; an operations account runs multi-account Automation runbooks with rate controls for remediation.</li>
+</ul>`
+            }
+          ],
+          keyPoints: [
+            `CloudWatch cross-account observability uses a sink in the monitoring account and links from source accounts, per Region.`,
+            `Centralize CloudWatch Logs with subscriptions to cross-account destinations (Firehose/KDS), not export tasks.`,
+            `CloudTrail Lake = SQL over CloudTrail events with long retention and no table management.`,
+            `Config organization aggregators give a read-only multi-account compliance view; advanced queries add SQL.`,
+            `State Manager enforces desired state continuously; Patch Manager patch policies cover the org via Quick Setup.`,
+            `Automation runs multi-account, multi-Region with administration and execution roles plus rate controls.`
+          ],
+          examTips: [
+            `If many accounts need one place to view metrics, logs and traces "without copying data", think cross-account observability.`,
+            `If logs from all accounts must reach a central bucket in near real time, think subscription filters to a cross-account Firehose destination.`,
+            `If investigators need SQL over years of API activity with minimal setup, think CloudTrail Lake.`,
+            `If the requirement is "ensure an agent stays installed on all current and future instances", think State Manager association, not user data or a one-time Run Command.`,
+            `If the question needs one runbook executed in every account and Region with controlled rollout, think multi-account Automation.`
+          ],
+          services: ['Amazon CloudWatch', 'AWS CloudTrail Lake', 'AWS Config', 'AWS Systems Manager', 'Amazon Data Firehose', 'AWS Health', 'Amazon Security Lake']
         }
       ]
     },
@@ -926,7 +1365,7 @@ window.TRACKS.sap = {
               heading: 'Discovery and planning tools',
               html: `<ul>
 <li><strong>AWS Application Discovery Service</strong>: the <em>Agentless Collector</em> (VMware vCenter) gathers VM inventory and utilization; the <em>Discovery Agent</em> adds process-level data and <strong>network dependencies</strong> on physical or non-VMware servers.</li>
-<li><strong>AWS Migration Hub</strong>: single place to track migration status across tools, with network visualization of discovered dependencies and EC2 instance recommendations.</li>
+<li><strong>AWS Migration Hub</strong>: single place to track migration status across tools, with network visualization of discovered dependencies and EC2 instance recommendations. AWS Migration Hub (including Refactor Spaces) closed to new customers on November 7, 2025; existing customers can keep using it, and AWS points new projects to AWS Transform. The current SAP-C02 exam was written before this change, so expect Migration Hub in questions.</li>
 <li><strong>Migration Evaluator</strong>: builds a directional business case (TCO) from utilization data, including licensing optimization.</li>
 <li><strong>AWS Transform</strong> (agentic AI, 2025) accelerates VMware, .NET, mainframe and other modernization assessments and conversions; treat it as an accelerator on top of the classic discovery and migration services.</li>
 <li><strong>AWS Migration Acceleration Program (MAP)</strong>: assess, mobilize, migrate-and-modernize phases with funding and partner support.</li>
@@ -1115,7 +1554,7 @@ window.TRACKS.sap = {
 <tr><td>Java/.NET app on VMs</td><td>Containers on ECS/EKS (Fargate)</td><td>AWS App2Container can containerize existing Java and .NET apps; AWS Transform helps port .NET Framework to cross-platform .NET</td></tr>
 <tr><td>Cron jobs and scripts</td><td>EventBridge Scheduler + Lambda or Step Functions</td><td>Eliminates idle servers</td></tr>
 <tr><td>Batch jobs</td><td>AWS Batch or Step Functions Distributed Map</td><td>Use Spot for cost</td></tr>
-<tr><td>Web app with spiky traffic</td><td>Lambda + API Gateway, or App Runner/ECS</td><td>Consider Lambda limits (15-minute max duration)</td></tr>
+<tr><td>Web app with spiky traffic</td><td>Lambda + API Gateway, or ECS on Fargate</td><td>Consider Lambda limits (15-minute max duration)</td></tr>
 <tr><td>Self-managed message broker</td><td>Amazon MQ (ActiveMQ/RabbitMQ protocol compatibility) or SQS/SNS when redesigning</td><td>Amazon MQ avoids rewriting clients</td></tr>
 </tbody></table>`
             },
@@ -1124,7 +1563,7 @@ window.TRACKS.sap = {
               html: `<ul>
 <li>Commercial engines to <strong>Aurora PostgreSQL/MySQL</strong> to remove licensing costs (SCT/DMS Schema Conversion + DMS). <strong>Babelfish for Aurora PostgreSQL</strong> understands T-SQL and the SQL Server wire protocol, reducing application changes for SQL Server migrations.</li>
 <li>Keep Oracle or SQL Server on <strong>RDS</strong> (replatform) when the app depends on proprietary features; <strong>RDS Custom</strong> when you need OS or database customization access.</li>
-<li>Purpose-built: DynamoDB for key-value at scale, DocumentDB for MongoDB-compatible workloads, ElastiCache/MemoryDB for in-memory, Neptune for graph, Timestream for time series, OpenSearch for search, Redshift for warehousing.</li>
+<li>Purpose-built: DynamoDB for key-value at scale, DocumentDB for MongoDB-compatible workloads, ElastiCache/MemoryDB for in-memory, Neptune for graph, Timestream for InfluxDB for time series (Timestream for LiveAnalytics is closed to new customers), OpenSearch for search, Redshift for warehousing.</li>
 </ul>`
             },
             {
@@ -1161,6 +1600,88 @@ window.TRACKS.sap = {
             `If a vendor app needs OS-level access on a managed database, think RDS Custom.`
           ],
           services: ['Amazon ECS', 'AWS Lambda', 'AWS App2Container', 'Amazon MQ', 'Babelfish for Aurora PostgreSQL', 'Amazon RDS Custom', 'AWS Mainframe Modernization', 'AWS Transform']
+        },
+        {
+          id: 'p-modernization-patterns',
+          title: 'Modernization Patterns: Decomposing Monoliths, Event-Driven Redesign & Database Modernization',
+          minutes: 18,
+          summary: `Apply proven decomposition patterns on AWS: a routing façade, event interception and CDC, sagas and outboxes, fan-out messaging, and like-for-like or engine-changing database moves.`,
+          sections: [
+            {
+              heading: 'Decomposition patterns',
+              html: `<table><thead><tr><th>Pattern</th><th>How it works</th><th>Use when</th></tr></thead><tbody>
+<tr><td>Strangler fig</td><td>A façade routes selected paths to new services; the monolith shrinks over time</td><td>HTTP-facing capabilities can be carved out one at a time</td></tr>
+<tr><td>Branch by abstraction</td><td>Introduce an interface inside the code, build the new implementation behind it, switch over</td><td>The component is internal and not reachable at the edge</td></tr>
+<tr><td>Event interception / leave-and-layer</td><td>Capture the monolith's changes (CDC from its database, or events it publishes) and build new features on that stream</td><td>Add capability without changing monolith code</td></tr>
+<tr><td>Parallel run</td><td>Old and new both process requests; outputs are compared before switching</td><td>High-risk logic such as pricing or billing</td></tr>
+<tr><td>Anti-corruption layer</td><td>Translates between legacy and new domain models</td><td>Keep the new service's model clean</td></tr>
+</tbody></table>
+<ul>
+<li>Draw boundaries around <strong>business capabilities / bounded contexts</strong>, starting with something valuable but loosely coupled.</li>
+<li>Split the <strong>data</strong>, not just the code: a microservice that still writes the monolith's tables is a distributed monolith.</li>
+</ul>`
+            },
+            {
+              heading: 'Building the façade on AWS',
+              html: `<ul>
+<li><strong>Amazon API Gateway:</strong> REST APIs (usage plans and API keys, request validation, caching, private APIs, WAF) or HTTP APIs (lower cost and latency, JWT authorizers). Route <code>/orders</code> to Lambda and keep a default route to the monolith through a <strong>VPC link</strong>, so the monolith stays on a private, internal load balancer.</li>
+<li><strong>ALB listener rules</strong> (path or header based, with Lambda or IP targets) or <strong>CloudFront behaviors</strong> are alternative façades.</li>
+<li><strong>AWS Migration Hub Refactor Spaces</strong> automated this pattern across accounts (API Gateway, NLB and Transit Gateway). AWS has announced it is no longer open to new customers, so for new projects build the same façade directly with API Gateway or ALB plus Transit Gateway or VPC Lattice.</li>
+<li><strong>Lambda behind the façade:</strong> mind the 15-minute maximum duration, concurrency limits and database connections (RDS Proxy); use ECS on Fargate for long-running or steady-load services.</li>
+</ul>
+<div class="callout">Weighted DNS splits traffic randomly, not by capability. A strangler façade needs <strong>path or header routing</strong> so that each capability goes to exactly one implementation.</div>`
+            },
+            {
+              heading: 'Event-driven redesign',
+              html: `<table><thead><tr><th>Fan-out option</th><th>Strength</th><th>Pick when</th></tr></thead><tbody>
+<tr><td>SNS topic → SQS queues</td><td>Durable buffering per subscriber, subscription <strong>filter policies</strong> on attributes or payload, DLQs, FIFO topics for ordered fan-out</td><td>A few to many consumers, each processing at its own pace</td></tr>
+<tr><td>EventBridge bus</td><td>Content-based rules, many targets, cross-account buses, SaaS sources, schema registry, archive and replay</td><td>Routing domain events across teams and accounts</td></tr>
+<tr><td>Kinesis Data Streams / MSK</td><td>Ordered, replayable log; many independent readers</td><td>High-volume streams and replay requirements</td></tr>
+</tbody></table>
+<ul>
+<li><strong>Transactional outbox:</strong> write the state change and the event in the same database transaction (for example to an outbox table or a DynamoDB item whose stream feeds EventBridge), so an event is never lost or published for a rolled-back change.</li>
+<li><strong>Sagas</strong> replace distributed transactions: Step Functions orchestrates the steps and runs <strong>compensating actions</strong> (refund, release inventory) when a later step fails.</li>
+<li>Consumers must be <strong>idempotent</strong> because SNS, SQS and EventBridge deliver at least once.</li>
+<li><strong>CDC to a stream:</strong> AWS DMS can replicate ongoing changes from the monolith database to Kinesis Data Streams (or MSK), letting new services build their own read models without touching monolith code.</li>
+</ul>`
+            },
+            {
+              heading: 'Database modernization',
+              html: `<table><thead><tr><th>Goal</th><th>Tooling</th></tr></thead><tbody>
+<tr><td>Like-for-like move (MySQL → RDS/Aurora MySQL, PostgreSQL → RDS/Aurora PostgreSQL, MongoDB → DocumentDB)</td><td><strong>DMS homogeneous data migrations</strong>: a managed, serverless experience that uses the engine's native tools for full load and ongoing replication</td></tr>
+<tr><td>Leave SQL Server with minimal code change</td><td><strong>Babelfish for Aurora PostgreSQL</strong>: a T-SQL / TDS endpoint (SQL Server port 1433) alongside the PostgreSQL endpoint; assess first with <strong>Babelfish Compass</strong></td></tr>
+<tr><td>Change engine and convert code (Oracle → Aurora PostgreSQL)</td><td>DMS Schema Conversion (with generative AI assistance for some conversions) or AWS SCT, then DMS full load + CDC</td></tr>
+<tr><td>Break out purpose-built stores</td><td>DynamoDB for carts and sessions, OpenSearch for search, ElastiCache for hot reads, fed by CDC or events</td></tr>
+</tbody></table>
+<div class="callout warn">Babelfish does not support every T-SQL feature. Run Babelfish Compass against the schema and plan remediation for unsupported items before promising "no code changes".</div>`
+            },
+            {
+              heading: 'Reference scenario',
+              html: `<p><strong>Scenario:</strong> a travel company's .NET booking monolith on EC2 uses SQL Server; search is slow, every release is monthly, and the business wants a new loyalty feature next quarter without touching the booking core.</p>
+<ul>
+<li>An API Gateway HTTP API becomes the single entry point; the default route reaches the monolith on an internal ALB through a VPC link, and <code>/search</code> moves to a new service.</li>
+<li>DMS CDC streams booking changes into Kinesis Data Streams; the search service builds an OpenSearch index and the loyalty service builds its own DynamoDB tables from the stream (event interception).</li>
+<li>Booking becomes a Step Functions saga (reserve seat, take payment, issue ticket) with compensations; confirmation events fan out through SNS to SQS queues for email, loyalty and analytics with filter policies.</li>
+<li>SQL Server moves to Aurora PostgreSQL with Babelfish after a Compass assessment; a separate MySQL reporting database moves with DMS homogeneous data migrations.</li>
+</ul>`
+            }
+          ],
+          keyPoints: [
+            `Strangler fig, branch by abstraction, event interception, parallel run and anti-corruption layers are complementary.`,
+            `Façade on AWS: API Gateway (VPC link to a private monolith), ALB rules or CloudFront behaviors – path-based, not weighted DNS.`,
+            `Refactor Spaces is closed to new customers; build the façade directly.`,
+            `SNS → SQS fan-out with filter policies gives each consumer its own durable buffer.`,
+            `Use sagas with compensations and the transactional outbox instead of distributed transactions.`,
+            `DMS homogeneous migrations for like-for-like moves; Babelfish (assessed with Compass) for SQL Server to Aurora PostgreSQL.`
+          ],
+          examTips: [
+            `If new services need monolith data in near real time "without changing the monolith", think DMS CDC to Kinesis (event interception).`,
+            `If a business transaction now spans several services, think Step Functions saga with compensating actions.`,
+            `If several consumers each need every order event but only some event types, think SNS fan-out to SQS with filter policies.`,
+            `If the migration is PostgreSQL to Aurora PostgreSQL with minimal effort, think DMS homogeneous data migrations, not SCT.`,
+            `If the monolith must stay private while new routes go to Lambda, think API Gateway with a VPC link.`
+          ],
+          services: ['Amazon API Gateway', 'AWS Lambda', 'Amazon SNS', 'Amazon SQS', 'Amazon EventBridge', 'AWS Step Functions', 'AWS Database Migration Service', 'Babelfish for Aurora PostgreSQL']
         }
       ]
     }
@@ -1228,6 +1749,46 @@ window.TRACKS.sap = {
     { domain: 'migrate', front: `Migrate ActiveMQ apps without rewriting clients`, back: `<b>Amazon MQ</b> (supports ActiveMQ and RabbitMQ protocols).` },
     { domain: 'migrate', front: `Babelfish for Aurora PostgreSQL`, back: `Lets Aurora PostgreSQL understand <b>T-SQL and the SQL Server wire protocol</b>, reducing app changes when leaving SQL Server.` },
     { domain: 'migrate', front: `Strangler fig pattern`, back: `Put a routing façade in front of a monolith and <b>incrementally replace</b> capabilities with new services until the monolith can be retired.` }
+,
+    // org – identity federation and hybrid edge
+    { domain: 'org', front: `Cognito user pool vs identity pool`, back: `<b>User pool</b>: user directory and authentication, issues JWTs. <b>Identity pool</b>: exchanges tokens (or guest access) for <b>temporary AWS credentials</b> via an IAM role.` },
+    { domain: 'org', front: `Core ABAC condition for matching projects`, back: `<b>aws:ResourceTag/project</b> must equal <b>aws:PrincipalTag/project</b>; also require aws:RequestTag on create and deny tag changes.` },
+    { domain: 'org', front: `How do Identity Center users get session tags for ABAC?`, back: `<b>Attributes for access control</b>, mapped from SAML assertion or SCIM attributes of the external IdP.` },
+    { domain: 'org', front: `Why does a permission set fail to provision with a customer managed policy?`, back: `Customer managed policies are referenced <b>by name and path</b>; the policy must already exist in every target account (deploy it with StackSets).` },
+    { domain: 'org', front: `Letting developers create IAM roles safely`, back: `Allow iam:CreateRole only when <b>iam:PermissionsBoundary</b> equals the approved boundary ARN; deny removing/altering the boundary; restrict role path and iam:PassRole.` },
+    { domain: 'org', front: `Maximum session duration for a chained role`, back: `<b>One hour</b>, regardless of the role's configured maximum.` },
+    { domain: 'org', front: `IAM Roles Anywhere`, back: `Temporary AWS credentials for workloads <b>outside AWS</b> using X.509 certificates from a trusted CA – no long-term access keys.` },
+    { domain: 'org', front: `What happens to an Outpost when the service link goes down?`, back: `Running instances and local traffic continue, but <b>no control-plane actions</b> (launch, modify) are possible – pre-provision spare capacity.` },
+    { domain: 'org', front: `Outposts vs Local Zones vs Wavelength`, back: `<b>Outposts</b>: in your data center. <b>Local Zones</b>: AWS-run metro locations near users. <b>Wavelength</b>: inside 5G carrier networks for mobile devices.` },
+    { domain: 'org', front: `Volume Gateway cached vs stored`, back: `<b>Cached</b>: primary data in AWS, hot data cached locally. <b>Stored</b>: full dataset on premises, asynchronous snapshots to AWS.` },
+    { domain: 'org', front: `Replace a physical tape library without changing backup software`, back: `<b>Tape Gateway</b> (iSCSI VTL), archiving tapes to S3 Glacier Flexible Retrieval or Deep Archive.` },
+    { domain: 'org', front: `AWS Cloud WAN`, back: `Global core network defined by one <b>network policy</b> with <b>segments</b>; automates multi-Region routing that would otherwise need TGW peering and static routes.` },
+    // new – data analytics and resilience engineering
+    { domain: 'new', front: `Lake Formation row- and cell-level security`, back: `<b>Data filters</b> (row filter expressions plus column inclusion/exclusion) granted to principals.` },
+    { domain: 'new', front: `LF-Tags`, back: `Lake Formation <b>tag-based access control</b>: tag databases, tables and columns, then grant on tag expressions instead of named resources.` },
+    { domain: 'new', front: `Consumer-side step for a Lake Formation cross-account share`, back: `The consumer's data lake admin <b>re-grants</b> to local principals and creates <b>resource links</b> to the shared database/table.` },
+    { domain: 'new', front: `Why are Lake Formation permissions not enforced on a table?`, back: `The default <b>IAMAllowedPrincipals</b> grant ("use only IAM access control") is still in place; revoke it to enforce Lake Formation permissions.` },
+    { domain: 'new', front: `Three Athena cost/performance levers`, back: `<b>Columnar formats</b> (Parquet/ORC) with compression, <b>partitioning</b> (with partition projection), and <b>workgroup data usage limits</b>.` },
+    { domain: 'new', front: `Redshift data sharing requirements`, back: `<b>RA3</b> provisioned clusters or <b>Redshift Serverless</b> on both sides; live, no-copy reads across clusters, accounts and Regions.` },
+    { domain: 'new', front: `Zero-ETL integration`, back: `Managed near-real-time replication from sources such as <b>Aurora, RDS for MySQL and DynamoDB into Redshift</b> with no pipeline to build.` },
+    { domain: 'new', front: `Amazon Data Firehose key features`, back: `Managed delivery to S3, Redshift, OpenSearch, Splunk, HTTP and Iceberg; <b>buffering, Lambda transform, Parquet/ORC conversion, dynamic partitioning</b>.` },
+    { domain: 'new', front: `Shuffle sharding`, back: `Assign each customer a <b>random combination</b> of workers so one bad customer only takes down its own combination; others overlap at most partially.` },
+    { domain: 'new', front: `Cell-based architecture`, back: `Many independent copies of the full stack, each serving a subset of customers via a <b>thin cell router</b>; deploy cell by cell to limit blast radius.` },
+    { domain: 'new', front: `Zonal shift vs zonal autoshift`, back: `<b>Zonal shift</b>: you move traffic away from an AZ temporarily. <b>Zonal autoshift</b>: AWS does it automatically when it detects an AZ impairment.` },
+    { domain: 'new', front: `ARC safety rules`, back: `<b>Assertion rules</b> (e.g., at least one routing control On) and <b>gating rules</b> (a master switch that must be On before others change).` },
+    { domain: 'new', front: `Why add jitter to exponential backoff?`, back: `To <b>desynchronize</b> retrying clients so they do not hit a recovering dependency in coordinated waves.` },
+    // improve – operations at scale
+    { domain: 'improve', front: `CloudWatch cross-account observability components`, back: `A <b>sink</b> in the monitoring account and <b>links</b> from source accounts (Observability Access Manager), configured per Region.` },
+    { domain: 'improve', front: `Near-real-time CloudWatch Logs centralization across accounts`, back: `<b>Subscription filters</b> (or account-level subscription policies) to a <b>cross-account destination</b> such as Firehose, delivering to the Log Archive bucket.` },
+    { domain: 'improve', front: `CloudTrail Lake`, back: `Managed <b>event data stores</b> with <b>SQL queries</b> over CloudTrail (and other) events, organization-wide, with long retention and no table management.` },
+    { domain: 'improve', front: `Config organization aggregator`, back: `Read-only <b>multi-account, multi-Region</b> view of inventory and compliance from the management or delegated admin account; supports advanced queries.` },
+    { domain: 'improve', front: `State Manager vs Run Command`, back: `<b>State Manager</b> continuously enforces a desired state (including new instances); <b>Run Command</b> runs a one-time command.` },
+    { domain: 'improve', front: `Roles for multi-account Systems Manager Automation`, back: `<b>AutomationAdministrationRole</b> in the central account and <b>AutomationExecutionRole</b> in each target account.` },
+    // migrate – modernization patterns
+    { domain: 'migrate', front: `Transactional outbox pattern`, back: `Write the state change and the event in the <b>same transaction</b>, then publish from the outbox (e.g., via streams or CDC) so events are never lost or phantom.` },
+    { domain: 'migrate', front: `Event interception for monolith decomposition on AWS`, back: `<b>DMS CDC</b> from the monolith database to <b>Kinesis Data Streams</b>; new services build their own data from the stream without changing monolith code.` },
+    { domain: 'migrate', front: `DMS homogeneous data migrations`, back: `Managed, serverless like-for-like migrations (MySQL, PostgreSQL, MongoDB to DocumentDB) using the engine's <b>native tools</b>.` },
+    { domain: 'migrate', front: `Status of Migration Hub Refactor Spaces`, back: `<b>No longer open to new customers</b>; build the strangler façade directly with API Gateway or ALB plus Transit Gateway or VPC Lattice.` }
   ],
   // =======================================================================
   // PRACTICE QUESTIONS
@@ -1851,6 +2412,527 @@ window.TRACKS.sap = {
       ],
       answer: [0],
       explanation: `<b>A is correct.</b> Replatforming keeps COBOL source code and skills while moving execution to a managed, mainframe-compatible runtime on AWS, which is achievable within the timeline.<br><b>B</b> converts code to Java, conflicting with the requirement to keep developing in COBOL (though it is a valid path for companies leaving COBOL).<br><b>C</b> Application Migration Service replicates x86 servers, not mainframe systems.<br><b>D</b> a full rewrite in 18 months is high risk and abandons the COBOL team's skills.`
+    },
+    // ---------------- org (expanded) ----------------
+    {
+      id: 'sap-051', domain: 'org', lesson: 'p-identity-federation', multi: false,
+      question: `A company with 120 accounts wants application teams to create their own IAM roles for AWS Lambda functions and Amazon ECS tasks without opening tickets with the central cloud team. The security team is concerned that a developer could create a role with AdministratorAccess and then assume it or pass it to a function to escalate privileges. The developers' permission set already allows iam:CreateRole, iam:AttachRolePolicy and iam:PassRole. What should the solutions architect do to allow self-service while preventing privilege escalation?`,
+      options: [
+        `Attach an SCP to the workload OUs that denies iam:CreateRole for all principals except the central cloud team's role.`,
+        `Create a permissions boundary policy that defines the maximum allowed permissions, update the developer permission set so that iam:CreateRole and iam:PutRolePermissionsBoundary are allowed only when the iam:PermissionsBoundary condition equals that policy ARN, deny deleting or modifying the boundary, and limit iam:PassRole to roles under a dedicated path.`,
+        `Deploy an AWS Config rule that detects IAM roles with the AdministratorAccess policy attached and an automatic remediation that deletes them.`,
+        `Replace the developer permission set with the AWS managed PowerUserAccess policy.`
+      ],
+      answer: [1],
+      explanation: `<b>B is correct.</b> Requiring a specific permissions boundary on every role the developers create caps the effective permissions of those roles, and denying changes to the boundary plus restricting PassRole by path closes the escalation paths while keeping self-service.<br><b>A</b> prevents escalation but removes self-service entirely, which is the opposite of the requirement.<br><b>C</b> is detective: the privileged role exists until remediation runs, and any policy other than AdministratorAccess that grants broad rights is missed.<br><b>D</b> PowerUserAccess denies most IAM actions, so developers could no longer create roles at all.`
+    },
+    {
+      id: 'sap-052', domain: 'org', lesson: 'p-identity-federation', multi: true,
+      question: `A consumer fintech is building a mobile app. Customers must be able to sign up with email and password or sign in with Apple or Google, with MFA support. After sign-in, the app uploads identity documents directly to an Amazon S3 bucket, and each customer must be able to write only to an S3 prefix that belongs to them. The company does not want to proxy uploads through its own servers or embed long-term credentials in the app. Which combination of steps meets these requirements? (Choose TWO.)`,
+      options: [
+        `Create an Amazon Cognito user pool with Apple and Google configured as social identity providers and MFA enabled.`,
+        `Create an IAM user for each customer during sign-up and return access keys to the app.`,
+        `Create an Amazon Cognito identity pool that trusts the user pool, with an authenticated IAM role whose policy allows s3:PutObject only on the prefix built from the &#36;{cognito-identity.amazonaws.com:sub} policy variable.`,
+        `Configure IAM Identity Center with Google Workspace as the identity source and assign customers a permission set.`,
+        `Store a single IAM access key in AWS Secrets Manager and have the app retrieve it at startup to upload documents.`
+      ],
+      answer: [0, 2],
+      explanation: `<b>A and C are correct.</b> The user pool provides sign-up, sign-in, social federation and MFA; the identity pool exchanges the user pool token for temporary credentials of an IAM role, and the policy variable scopes each customer to their own prefix, so the app uploads directly to S3 safely.<br><b>B</b> creates unmanageable numbers of IAM users and long-term keys on devices.<br><b>D</b> Identity Center is for workforce access to AWS accounts and applications, not millions of consumers.<br><b>E</b> distributes one shared long-term credential to every device; per-user isolation is impossible and a leaked key exposes everything.`
+    },
+    {
+      id: 'sap-053', domain: 'org', lesson: 'p-identity-federation', multi: false,
+      question: `A company uses IAM Identity Center with Microsoft Entra ID as the identity source. The platform team created a permission set that references a customer managed policy named DataReadOnly and assigned it to a group across 60 accounts. Provisioning succeeds in 12 accounts and fails in the other 48 with an error that the policy cannot be found. The team wants a consistent fix that also works for accounts created in the future. What should the solutions architect do?`,
+      options: [
+        `Convert the customer managed policy to an inline policy in each of the 48 accounts.`,
+        `Re-create the permission set from the delegated administrator account instead of the management account.`,
+        `Deploy the DataReadOnly policy with the same name and path to all accounts with a service-managed CloudFormation StackSet with automatic deployment, then re-provision the permission set.`,
+        `Enable SCIM provisioning in Entra ID so that the policy is synchronized together with users and groups.`
+      ],
+      answer: [2],
+      explanation: `<b>C is correct.</b> Permission sets reference customer managed policies by name and path, and the policy must already exist in each target account. A service-managed StackSet with automatic deployment creates it everywhere, including future accounts.<br><b>A</b> is a manual, per-account workaround that does not cover new accounts and bypasses the permission set design.<br><b>B</b> where the permission set is administered from does not change the requirement that the policy exist in each account.<br><b>D</b> SCIM synchronizes users and groups only; it never creates IAM policies.`
+    },
+    {
+      id: 'sap-054', domain: 'org', lesson: 'p-identity-federation', multi: false,
+      question: `A research company has 45 project teams sharing three AWS accounts. Each team must manage only the EC2 instances, S3 buckets and Secrets Manager secrets that belong to its project. New projects start every month, and the security team wants to stop creating a new IAM role and policy for each project. Users sign in through IAM Identity Center, and the corporate IdP already has a project attribute for every user. What should the solutions architect recommend?`,
+      options: [
+        `Map the IdP project attribute to a session tag with Identity Center attributes for access control, and use one permission set whose policies allow actions only when aws:ResourceTag/project equals aws:PrincipalTag/project, require the project tag on creation through aws:RequestTag, and deny changes to the project tag.`,
+        `Create one permission set per project and assign each project's group to it in the three accounts.`,
+        `Move each project to its own AWS account and use SCPs to limit what each project can do.`,
+        `Create IAM groups in each account for each project and add IAM users to them based on a nightly export from the IdP.`
+      ],
+      answer: [0],
+      explanation: `<b>A is correct.</b> ABAC with session tags lets a single permission set serve every project: access follows matching tags, new projects only need new tag values, and controlling tags at creation and blocking tag changes keeps users from reaching other projects' resources.<br><b>B</b> is the role-per-project sprawl the company wants to stop.<br><b>C</b> might be a good long-term structure but is a large re-architecture and still needs new accounts and policies per project.<br><b>D</b> reintroduces IAM users, long-term credentials and a custom sync job.`
+    },
+    {
+      id: 'sap-055', domain: 'org', lesson: 'p-hybrid-edge', multi: false,
+      question: `A hospital group runs medical imaging systems in its own data center. A new AI-assisted image analysis application must process images within a few milliseconds of the imaging devices, and regulations require that patient images remain on hospital premises. The development team wants to use the same EC2, EBS, Amazon EKS and Amazon RDS APIs and tooling it uses in the AWS Region, managed from the existing AWS accounts. Which solution should the solutions architect recommend?`,
+      options: [
+        `Deploy the application in the nearest AWS Local Zone and connect it to the data center with AWS Direct Connect.`,
+        `Deploy the application in an AWS Wavelength Zone of the hospital's mobile carrier.`,
+        `Run the application on AWS Snowball Edge Compute Optimized devices installed in the data center.`,
+        `Install an AWS Outposts rack in the hospital data center, connect its service link to the parent Region, and run the application on EC2, EKS and RDS on Outposts with a local gateway to the imaging network.`
+      ],
+      answer: [3],
+      explanation: `<b>D is correct.</b> Outposts racks place AWS-managed infrastructure on premises, keep data local, provide very low latency to on-premises systems through the local gateway, and support EC2, EBS, EKS and RDS with the same APIs and accounts.<br><b>A</b> a Local Zone is an AWS facility, so images would leave hospital premises, and the extra network hop adds latency.<br><b>B</b> Wavelength targets mobile devices on a 5G network and also runs outside the hospital.<br><b>C</b> Snowball Edge is designed for disconnected or rugged edge sites and data transfer, not a continuously managed production platform offering RDS and EKS.`
+    },
+    {
+      id: 'sap-056', domain: 'org', lesson: 'p-hybrid-edge', multi: true,
+      question: `A manufacturer runs its plant-floor control application on an AWS Outposts rack in each factory. During a recent fiber cut, the Outpost lost its service link for six hours. The running instances continued to serve local users, but an Auto Scaling group could not replace a failed instance and the plant ran at reduced capacity. The company wants the plant to keep full capacity during future service link outages. Which actions should the solutions architect recommend? (Choose TWO.)`,
+      options: [
+        `Provision enough running instances on the Outpost in advance (N+1 capacity) so that losing an instance during a disconnection does not require launching a replacement.`,
+        `Provide redundant service link connectivity over physically diverse paths, for example a Direct Connect connection plus a separate internet-based path.`,
+        `Configure the Auto Scaling group with a shorter health check grace period so that replacements launch faster while disconnected.`,
+        `Store all application data in Amazon S3 in the parent Region so that instances are stateless.`,
+        `Enable automatic failover of the Outpost to the nearest Local Zone during service link outages.`
+      ],
+      answer: [0, 1],
+      explanation: `<b>A and B are correct.</b> Launching instances is a control-plane action that needs the service link, so the plant must already have spare capacity running (static stability), and diverse service link paths reduce the chance of disconnection.<br><b>C</b> Auto Scaling still cannot launch instances on the Outpost without the Region's control plane, however short the grace period.<br><b>D</b> makes the plant dependent on the Region for data – exactly what fails during a disconnection.<br><b>E</b> no such automatic failover exists, and moving plant-floor processing off site would break the latency requirement.`
+    },
+    {
+      id: 'sap-057', domain: 'org', lesson: 'p-hybrid-edge', multi: false,
+      question: `A media company backs up 400 TB of on-premises data each month with commercial backup software that writes to an aging physical tape library. Tapes are shipped off site for 10 years of retention, and restores of older data are rare. The company wants to eliminate physical tapes and off-site shipping, keep its existing backup software and procedures, and minimize storage cost for long-term retention. What should the solutions architect recommend?`,
+      options: [
+        `Deploy an Amazon S3 File Gateway and reconfigure the backup software to write backup files to an SMB share, with an S3 Lifecycle rule to S3 Standard-IA.`,
+        `Deploy AWS Storage Gateway Tape Gateway as a virtual tape library, point the backup software at the iSCSI VTL, and archive ejected tapes to S3 Glacier Deep Archive.`,
+        `Deploy Volume Gateway in stored mode and schedule EBS snapshots for retention.`,
+        `Use AWS DataSync to copy the backup catalog and data to Amazon EFS each month.`
+      ],
+      answer: [1],
+      explanation: `<b>B is correct.</b> Tape Gateway presents an iSCSI virtual tape library that existing backup software supports without procedural changes, and archived tapes move to S3 Glacier Deep Archive, the lowest-cost tier for rarely accessed long-term data.<br><b>A</b> changes the backup target and procedures, and Standard-IA is far more expensive than Deep Archive for 10-year retention.<br><b>C</b> Volume Gateway is block storage for applications, not a tape replacement, and snapshot retention is costlier and changes procedures.<br><b>D</b> EFS is an expensive primary file system, not an archive, and abandons the backup software workflow.`
+    },
+    {
+      id: 'sap-058', domain: 'org', lesson: 'p-hybrid-connectivity', multi: false,
+      question: `A global company operates VPCs in nine AWS Regions. Each Region has its own Transit Gateway, and the network team maintains a full mesh of inter-Region Transit Gateway peering attachments with hundreds of static routes. Production, development and shared-services traffic must stay segmented globally, and the team spends days on every new Region or VPC rollout. The company wants a centrally defined global network with automatic route propagation between Regions and segment-based isolation. What should the solutions architect recommend?`,
+      options: [
+        `Replace Transit Gateway peering with VPC peering between every pair of VPCs across Regions.`,
+        `Keep the Transit Gateway mesh and write a Lambda function that updates static routes on every peering attachment when VPCs change.`,
+        `Deploy AWS Cloud WAN with a core network policy that defines production, development and shared-services segments with sharing rules, and attach the VPCs (or existing Transit Gateways) to the core network.`,
+        `Build a mesh of AWS Site-to-Site VPN connections between the Transit Gateways and run BGP over the tunnels.`
+      ],
+      answer: [2],
+      explanation: `<b>C is correct.</b> Cloud WAN builds a global core network from a single declarative policy, propagates routes automatically between Regions, and isolates traffic with segments and explicit sharing rules – exactly the operational pain the mesh creates.<br><b>A</b> VPC peering is non-transitive and would require thousands of connections with no segmentation model.<br><b>B</b> automates the symptom with custom code that must be maintained and still leaves a complex static mesh.<br><b>D</b> VPN tunnels add bandwidth limits and cost, and TGW peering already uses the AWS backbone; it does not simplify management.`
+    },
+    {
+      id: 'sap-059', domain: 'org', lesson: 'p-multi-account-strategy', multi: true,
+      question: `A company is hardening its AWS Organizations guardrails for all workload OUs. Requirements: workloads may run only in eu-west-1 and eu-central-1, but global services such as IAM, Route 53, CloudFront and AWS Support must keep working; member accounts must not be able to leave the organization; and the IAM role that the security team uses to manage baseline resources must not be modified or deleted by anyone else. Which SCP statements should the solutions architect implement? (Choose THREE.)`,
+      options: [
+        `A Deny statement with NotAction listing the global services, applied when aws:RequestedRegion is not eu-west-1 or eu-central-1.`,
+        `A Deny statement for organizations:LeaveOrganization.`,
+        `A Deny statement for iam:* actions on the security team's role ARN, with a condition that excludes requests where aws:PrincipalArn matches the security team's role.`,
+        `An Allow statement that grants iam:* to the security team's role so that it can manage baseline resources.`,
+        `Attach the Region-restriction SCP to the management account so that it is also restricted.`,
+        `Replace the FullAWSAccess policy at the root with an allow list containing only the services in use, without testing, to reduce risk quickly.`
+      ],
+      answer: [0, 1, 2],
+      explanation: `<b>A, B and C are correct.</b> The NotAction pattern denies regional actions outside the approved Regions while exempting global services; denying LeaveOrganization keeps accounts under governance; and a deny on the role with a PrincipalArn exception protects the security role from everyone else.<br><b>D</b> SCPs never grant permissions; the role still needs an identity policy.<br><b>E</b> SCPs do not apply to the management account, so attaching them there has no effect.<br><b>F</b> an untested allow-list SCP at the root is likely to break legitimate workloads; guardrails should be trialled in a policy staging OU first.`
+    },
+    {
+      id: 'sap-060', domain: 'org', lesson: 'p-access-control-at-scale', multi: false,
+      question: `A company runs 70 application accounts, each with its own VPC, NAT gateways and Transit Gateway attachment. The network team wants to reduce cost and IP address sprawl and keep full control of routing, NAT, and network ACLs, while application teams keep separate accounts for billing and IAM isolation and continue to launch their own EC2 instances, RDS databases and load balancers. Which approach meets these requirements with the least operational overhead?`,
+      options: [
+        `Keep a VPC per account but replace the Transit Gateway with VPC peering to a shared egress VPC.`,
+        `Move all application resources into the network account and give application teams IAM roles there.`,
+        `Create a single large VPC in each application account and use AWS Firewall Manager to manage its route tables.`,
+        `Create shared VPCs per environment in the network account and share application subnets with the application accounts by using AWS RAM, so participants launch resources into the shared subnets while the network account owns route tables, NAT gateways and network ACLs.`
+      ],
+      answer: [3],
+      explanation: `<b>D is correct.</b> VPC sharing lets participant accounts create resources in centrally owned subnets while the owner account controls the VPC, routing, gateways and NACLs. It reduces VPC, NAT and attachment counts but preserves account-level billing and IAM separation.<br><b>A</b> peering is non-transitive, cannot provide centralized internet egress through another VPC's NAT gateway, and keeps 70 VPCs.<br><b>B</b> collapses the account boundaries the company wants to keep.<br><b>C</b> Firewall Manager manages security policies, not VPC route tables, and still leaves 70 VPCs.`
+    },
+    {
+      id: 'sap-061', domain: 'org', lesson: 'p-dns-privatelink-inspection', multi: false,
+      question: `A company runs 140 microservices owned by different teams across 50 AWS accounts. Many VPCs have overlapping CIDR ranges. Services communicate over HTTPS and gRPC, and the security team wants service-to-service authorization expressed as IAM-style policies (for example, only the orders service may call the payments service), without managing Transit Gateway route tables, PrivateLink endpoints for each service pair, or sidecar proxies. What should the solutions architect recommend?`,
+      options: [
+        `Create an Amazon VPC Lattice service network in a central account, share it with the application accounts through AWS RAM, associate the VPCs and register each service, and use auth policies on the service network and services.`,
+        `Attach all VPCs to a Transit Gateway and use security groups referencing CIDR ranges to control service-to-service access.`,
+        `Create a PrivateLink endpoint service for every microservice and an interface endpoint in every consumer VPC.`,
+        `Peer all VPCs and use Route 53 private hosted zones for service discovery.`
+      ],
+      answer: [0],
+      explanation: `<b>A is correct.</b> VPC Lattice connects services across accounts and VPCs (including overlapping CIDRs) at the application layer, and auth policies evaluated with IAM provide caller-based authorization without route tables, per-pair endpoints or sidecars.<br><b>B</b> Transit Gateway cannot route between overlapping CIDRs, and CIDR-based rules do not express service identity.<br><b>C</b> works for overlapping CIDRs but creates hundreds of endpoint services and endpoints to manage, and provides no IAM-style service authorization.<br><b>D</b> peering fails with overlapping CIDRs and does not scale to 50 accounts.`
+    },
+    // ---------------- new (expanded) ----------------
+    {
+      id: 'sap-062', domain: 'new', lesson: 'p-data-analytics', multi: false,
+      question: `An insurance group is building a data mesh. Eight producer accounts store curated datasets in Amazon S3 and catalog them in the AWS Glue Data Catalog. Analysts in 20 consumer accounts query the data with Amazon Athena and Amazon EMR. Columns tagged as PII must be visible only to an approved analyst group, rows must be restricted by country for regional teams, and the central data governance team wants to manage grants by data classification rather than per table as hundreds of tables are added. What should the solutions architect recommend?`,
+      options: [
+        `Write S3 bucket policies in each producer account that grant consumer account roles access to specific prefixes, and use Glue Data Catalog resource policies for metadata access.`,
+        `Copy curated datasets into a bucket in each consumer account every night with S3 Batch Replication and remove PII columns during the copy.`,
+        `Register the producer S3 locations with AWS Lake Formation, define LF-Tags for domain and classification, tag databases, tables and PII columns, grant permissions on LF-Tag expressions to consumer accounts, use data filters for country-based row restrictions, and have consumer accounts create resource links.`,
+        `Load all datasets into a single Amazon Redshift cluster and create database users for each analyst with column-level GRANT statements.`
+      ],
+      answer: [2],
+      explanation: `<b>C is correct.</b> Lake Formation enforces column, row and cell-level access for Athena and EMR, LF-Tags let the governance team grant by classification instead of per table, cross-account grants are shared through RAM, and resource links surface the shared tables in consumer catalogs.<br><b>A</b> bucket policies work at object and prefix level and cannot hide columns or filter rows inside files.<br><b>B</b> creates many stale copies, high storage and pipeline cost, and still cannot do per-group column visibility.<br><b>D</b> abandons the S3 data mesh and per-account compute, and centralizes all data into one cluster with per-user grants that do not scale.`
+    },
+    {
+      id: 'sap-063', domain: 'new', lesson: 'p-data-analytics', multi: true,
+      question: `A marketing analytics team stores 3 years of clickstream data in Amazon S3 as uncompressed CSV files, written as thousands of small files per hour. Analysts run Amazon Athena queries that usually filter on event date and select a handful of columns, but each query scans many terabytes, runs for minutes and costs far more than budgeted. Occasionally an analyst's mistaken query scans the entire dataset. Which actions will MOST reduce cost and improve performance? (Choose TWO.)`,
+      options: [
+        `Use an AWS Glue ETL job (or Athena CTAS) to rewrite the data into compressed Apache Parquet, partitioned by event date and compacted into larger files, and update queries to filter on the partition column.`,
+        `Move the CSV files to S3 Glacier Flexible Retrieval to reduce storage cost.`,
+        `Enable S3 Transfer Acceleration on the bucket so that Athena reads data faster.`,
+        `Configure Athena workgroups with per-query data usage controls that cancel queries exceeding a scan threshold.`,
+        `Increase the number of Athena workgroups so that queries run in parallel.`
+      ],
+      answer: [0, 3],
+      explanation: `<b>A and D are correct.</b> Columnar, compressed, partitioned and compacted data lets Athena read only the needed columns and partitions, reducing data scanned (the billing unit) and runtime. Workgroup data usage controls stop runaway queries.<br><b>B</b> Athena cannot query objects in Glacier Flexible Retrieval without restoring them.<br><b>C</b> Transfer Acceleration speeds client uploads over long distances; it does nothing for Athena reads.<br><b>E</b> more workgroups do not reduce the data each query scans.`
+    },
+    {
+      id: 'sap-064', domain: 'new', lesson: 'p-data-analytics', multi: false,
+      question: `A retailer runs a central Amazon Redshift RA3 cluster that ingests sales data every 15 minutes. Finance, merchandising and supply-chain teams each have their own AWS accounts and need to query the latest sales tables with complex joins. Currently a nightly UNLOAD/COPY process copies tables into each team's cluster, so data is stale and storage is triplicated, and heavy merchandising queries slow down the central cluster. What should the solutions architect recommend?`,
+      options: [
+        `Enable concurrency scaling on the central cluster and give each team database users on it.`,
+        `Create Redshift datashares on the central producer cluster and share them with the teams' accounts, where each team queries the shared data from its own Redshift Serverless workgroup or RA3 cluster.`,
+        `Export the tables to S3 every 15 minutes and have each team query them with Redshift Spectrum.`,
+        `Create read replicas of the Redshift cluster in each team's account.`
+      ],
+      answer: [1],
+      explanation: `<b>B is correct.</b> Redshift data sharing provides live, transactionally consistent access to producer data across accounts without copying, and each consumer uses its own compute, isolating heavy workloads from the producer.<br><b>A</b> keeps all teams' queries on the central cluster and its account, so workload isolation and account separation are not achieved.<br><b>C</b> still runs a copy pipeline every 15 minutes and adds latency and complexity.<br><b>D</b> Redshift does not offer read replicas in other accounts; data sharing is the mechanism for this.`
+    },
+    {
+      id: 'sap-065', domain: 'new', lesson: 'p-data-analytics', multi: false,
+      question: `An online travel company stores bookings in an Amazon Aurora MySQL cluster. Analysts need booking data in Amazon Redshift within seconds to minutes of each transaction for operational dashboards. The data engineering team currently maintains an AWS DMS task and a custom Lambda-based loader that frequently breaks on schema changes. The company wants to remove the pipeline maintenance burden without affecting the Aurora workload. What should the solutions architect recommend?`,
+      options: [
+        `Run hourly Aurora exports to S3 in Parquet and query them with Redshift Spectrum.`,
+        `Replace the DMS task with Amazon Data Firehose reading from the Aurora binary log.`,
+        `Configure Aurora to stream changes to Kinesis Data Streams and build a Managed Service for Apache Flink application that writes to Redshift.`,
+        `Create an Aurora MySQL zero-ETL integration with Amazon Redshift and point the dashboards at the replicated tables in Redshift.`
+      ],
+      answer: [3],
+      explanation: `<b>D is correct.</b> A zero-ETL integration continuously replicates Aurora data into Redshift in near real time, managed by AWS with no pipeline code to maintain, and is designed to minimize impact on the source.<br><b>A</b> hourly exports violate the seconds-to-minutes freshness requirement.<br><b>B</b> Firehose cannot read a MySQL binary log as a source.<br><b>C</b> is a custom streaming pipeline – more components to maintain, not fewer.`
+    },
+    {
+      id: 'sap-066', domain: 'new', lesson: 'p-data-analytics', multi: false,
+      question: `An industrial IoT company receives telemetry from 200,000 sensors as JSON records. The data must land in Amazon S3 as compressed Parquet, partitioned by customer ID and date so that Athena queries are efficient, with delivery latency of a few minutes acceptable. The team wants no servers, no consumer applications and no custom batching code to operate. Which solution meets these requirements?`,
+      options: [
+        `Send records to Amazon Data Firehose with record format conversion to Parquet using a schema from the AWS Glue Data Catalog and dynamic partitioning on customer ID and date, delivering to S3.`,
+        `Send records to Kinesis Data Streams and run a Kinesis Client Library application on an EC2 Auto Scaling group that writes Parquet files to S3.`,
+        `Send records to Amazon MSK and deploy a self-managed Kafka Connect cluster on EC2 with an S3 sink connector.`,
+        `Invoke a Lambda function for each record that appends the record to a Parquet file in S3.`
+      ],
+      answer: [0],
+      explanation: `<b>A is correct.</b> Firehose is fully managed delivery: it buffers records, converts JSON to Parquet using a Glue schema, partitions output dynamically by keys in the data, and writes to S3 with minute-level latency and no code.<br><b>B</b> requires building and operating consumer applications on EC2.<br><b>C</b> introduces a Kafka cluster and a self-managed Connect fleet.<br><b>D</b> S3 objects cannot be appended to, and per-record invocations would produce millions of tiny files and high cost.`
+    },
+    {
+      id: 'sap-067', domain: 'new', lesson: 'p-resilience-engineering', multi: false,
+      question: `A SaaS company runs a document-rendering API on a fleet of 16 containerized workers behind a load balancer, shared by 2,000 tenants. Last month a single tenant submitted documents that triggered a rendering bug, crashing workers one by one as the load balancer retried the requests elsewhere, until the entire fleet was down for all tenants. The company wants to limit the impact of any single tenant's problematic workload to a small fraction of tenants without running a separate fleet per tenant. What should the solutions architect recommend?`,
+      options: [
+        `Increase the worker count to 64 so that the fleet takes longer to fail.`,
+        `Configure the load balancer with a longer deregistration delay and slow start mode.`,
+        `Implement shuffle sharding: assign each tenant to a unique combination of a few workers (for example 2 of 16) through a routing layer, so a poison tenant can only take down its own combination and tenants that overlap on one worker can retry on their other worker.`,
+        `Deploy one dedicated worker per tenant on AWS Fargate.`
+      ],
+      answer: [2],
+      explanation: `<b>C is correct.</b> Shuffle sharding gives each tenant a nearly unique combination of workers, so a poison workload crashes only that combination. Only the few tenants mapped to the identical pair are fully affected (16 workers give 120 possible pairs); tenants that share one worker degrade partially and retry on their other worker. It isolates without dedicated fleets.<br><b>A</b> only delays the same cascading failure because the bad requests are still retried across the whole fleet.<br><b>B</b> load balancer connection settings do not prevent the bad requests from reaching every worker.<br><b>D</b> provides isolation but at the cost of 2,000 dedicated workers, which the company wants to avoid.`
+    },
+    {
+      id: 'sap-068', domain: 'new', lesson: 'p-resilience-engineering', multi: true,
+      question: `A microservices platform has an edge service that calls an orders service, which calls an inventory service, which calls a database. Each layer retries failed calls three times immediately. During a brief database slowdown, request volume to the database increased by more than 20 times and the slowdown became a 45-minute outage. Which changes should the solutions architect recommend to prevent this from recurring? (Choose TWO.)`,
+      options: [
+        `Increase the retry count at every layer to five so that more requests eventually succeed.`,
+        `Use capped exponential backoff with jitter for retries (for example, the AWS SDK standard or adaptive retry mode) and set timeouts at each layer below the caller's timeout.`,
+        `Raise all client timeouts to five minutes so that requests wait for the database to recover.`,
+        `Retry at only one layer of the call chain, add a retry budget or circuit breaker that stops calls to a failing dependency, and shed excess load early with throttling.`,
+        `Add a second database and send every request to both databases in parallel.`
+      ],
+      answer: [1, 3],
+      explanation: `<b>B and D are correct.</b> Backoff with jitter spreads retries out instead of hammering the dependency in synchronized waves, and sane timeouts prevent resource exhaustion. Retrying at a single layer avoids multiplicative retry amplification (3 × 3 × 3 = 27 attempts), and circuit breakers, retry budgets and load shedding stop piling load onto a struggling dependency.<br><b>A</b> amplifies traffic even more.<br><b>C</b> ties up threads and connections throughout the stack, turning slowness into exhaustion.<br><b>E</b> doubles load on the data tier and introduces consistency problems without addressing amplification.`
+    },
+    {
+      id: 'sap-069', domain: 'new', lesson: 'p-resilience-engineering', multi: false,
+      question: `A payroll SaaS provider serves 9,000 business customers from one large regional deployment of ECS services, SQS queues and DynamoDB tables. Two recent incidents – a bad configuration push and a runaway batch from one large customer – each affected every customer. Leadership wants future incidents and deployments to affect only a small, bounded percentage of customers, and wants to grow by adding capacity in known, tested units. Which architecture should the solutions architect recommend?`,
+      options: [
+        `Scale the existing deployment vertically and add more Availability Zones.`,
+        `Adopt a cell-based architecture: deploy multiple independent, identically built cells (each with its own services, queues and tables), route each customer to a cell through a thin routing layer backed by a customer-to-cell mapping, cap cell size, and roll out changes one cell at a time.`,
+        `Create a separate AWS account per customer with a full copy of the stack.`,
+        `Use blue/green deployments for the existing stack so that configuration pushes can be rolled back quickly.`
+      ],
+      answer: [1],
+      explanation: `<b>B is correct.</b> Cells bound the blast radius of failures and deployments to the customers in one cell, cell-by-cell rollouts catch bad changes early, and adding new tested cells is the scaling unit.<br><b>A</b> keeps a single shared failure domain for all customers.<br><b>C</b> isolates customers but 9,000 full stacks is operationally and financially impractical.<br><b>D</b> speeds rollback but every customer is still affected when the bad change goes live, and it does nothing for noisy customers.`
+    },
+    {
+      id: 'sap-070', domain: 'new', lesson: 'p-resilience-engineering', multi: false,
+      question: `A bank runs an active/passive application in us-east-1 and us-west-2 using Aurora Global Database, ECS services that run at minimal size in the standby Region, and Route 53 records for routing. A Region failover requires about 15 ordered manual steps (fail over the global database, scale ECS services, update routing, and verify), which took 3 hours in the last test because engineers were unsure of the order. The bank wants failover executed as a repeatable, pre-approved plan from the healthy Region, with progress visible to stakeholders. What should the solutions architect recommend?`,
+      options: [
+        `Document the steps in a wiki runbook and hold a quarterly tabletop exercise.`,
+        `Write a Lambda function in us-east-1 that runs all the steps when a CloudWatch alarm fires.`,
+        `Replace Aurora Global Database with DynamoDB global tables so that no database failover is needed.`,
+        `Use Amazon Route 53 Application Recovery Controller Region switch to author a plan that orchestrates the Aurora Global Database failover, ECS scaling and routing steps, and execute and rehearse it from the standby Region.`
+      ],
+      answer: [3],
+      explanation: `<b>D is correct.</b> ARC Region switch runs pre-authored, ordered failover plans – including database failover, scaling and routing steps – from the Region you are failing over to, with execution status visible, so the process is repeatable and rehearsable.<br><b>A</b> leaves the same error-prone manual ordering that caused the 3-hour test.<br><b>B</b> places the automation in the Region likely to be impaired and makes failover automatic rather than a pre-approved decision.<br><b>C</b> is a major re-architecture of the data layer and changes consistency semantics; it does not address orchestration of the other steps.`
+    },
+    {
+      id: 'sap-071', domain: 'new', lesson: 'p-multi-region-active-active', multi: false,
+      question: `A logistics company runs a web application on EC2 instances in an Auto Scaling group with an Amazon Aurora PostgreSQL database in eu-west-1. Its disaster recovery requirements for a Regional outage are an RPO of under 1 minute and an RTO of under 30 minutes. The CFO insists on the lowest ongoing cost that meets the targets. Which DR design should the solutions architect recommend?`,
+      options: [
+        `Pilot light: add an Aurora Global Database secondary cluster in eu-central-1, copy AMIs and keep infrastructure as code ready there with the Auto Scaling group at zero or minimal capacity, and on failover promote the secondary, scale out the group, and switch DNS.`,
+        `Warm standby: run a full-size copy of the application tier in eu-central-1 at all times, with an Aurora Global Database secondary.`,
+        `Backup and restore: copy daily AWS Backup snapshots of Aurora and EC2 to eu-central-1 and restore them during a disaster.`,
+        `Multi-site active/active: serve traffic from both Regions with Aurora Global Database write forwarding.`
+      ],
+      answer: [0],
+      explanation: `<b>A is correct.</b> Aurora Global Database replication (typically under one second) meets the RPO, and keeping compute off or minimal with ready AMIs and templates allows recovery within tens of minutes – the cheapest option that meets both targets.<br><b>B</b> meets the targets but a full-size standby costs much more than needed for a 30-minute RTO.<br><b>C</b> daily snapshots give an RPO of up to 24 hours and restores take longer than 30 minutes.<br><b>D</b> exceeds the requirements at the highest cost.`
+    },
+    {
+      id: 'sap-072', domain: 'new', lesson: 'p-event-driven-serverless', multi: true,
+      question: `An order service publishes events such as OrderPlaced, OrderCancelled and OrderShipped. Three new consumers are being added: a billing service that needs OrderPlaced and OrderCancelled, a warehouse service that needs only OrderPlaced, and an analytics service that needs every event. Each consumer must receive its own copy of the relevant events, process at its own pace, survive its own downtime without losing events, and the order service must not be modified for each new consumer. Which combination of steps meets these requirements? (Choose TWO.)`,
+      options: [
+        `Publish events to an Amazon SNS topic and subscribe a separate Amazon SQS queue for each consumer service.`,
+        `Add SNS subscription filter policies on the event type for the billing and warehouse subscriptions, leaving the analytics subscription unfiltered.`,
+        `Have all three services poll a single shared SQS standard queue and discard events they do not need.`,
+        `Have the order service call each consumer's REST API synchronously after every order change.`,
+        `Publish events to an SQS FIFO queue with one message group ID per consumer.`
+      ],
+      answer: [0, 1],
+      explanation: `<b>A and B are correct.</b> SNS-to-SQS fan-out gives every consumer its own durable queue that buffers events during consumer downtime, and filter policies deliver only relevant event types; new consumers simply add subscriptions.<br><b>C</b> with a shared queue each message is consumed by only one service, so others miss it.<br><b>D</b> tightly couples the services, loses events when a consumer is down, and requires changing the order service for each consumer.<br><b>E</b> a queue still delivers each message to one consumer; message groups control ordering, not fan-out.`
+    },
+    {
+      id: 'sap-073', domain: 'new', lesson: 'p-identity-federation', multi: false,
+      question: `A B2B SaaS company is launching a multi-tenant web application on Amazon API Gateway and AWS Lambda. Each enterprise customer wants its employees to sign in with the customer's own corporate SAML 2.0 or OIDC identity provider, and the application must know which tenant each request belongs to for data isolation. Smaller customers without an IdP need email and password sign-in with MFA. What should the solutions architect recommend?`,
+      options: [
+        `Use IAM Identity Center, add each customer's IdP as an identity source, and assign application access through permission sets.`,
+        `Create IAM users for every customer employee and use IAM authorization on the API.`,
+        `Use an Amazon Cognito user pool, federate each enterprise tenant's SAML or OIDC IdP into it, allow native sign-up with MFA for smaller tenants, put the tenant ID in a custom attribute or token claim, and protect the API with a Cognito user pool authorizer.`,
+        `Use a Cognito identity pool with guest access and pass the tenant ID as a query string parameter.`
+      ],
+      answer: [2],
+      explanation: `<b>C is correct.</b> Cognito user pools support many SAML and OIDC IdPs plus native users with MFA, can carry a tenant identifier in tokens, and integrate directly with API Gateway authorizers.<br><b>A</b> Identity Center supports only one identity source per instance and is for workforce access, not a customer-facing multi-tenant app.<br><b>B</b> IAM users for external customers' employees do not scale and cannot federate per tenant.<br><b>D</b> guest identities are unauthenticated and a client-supplied tenant ID can be forged.`
+    },
+    // ---------------- improve (expanded) ----------------
+    {
+      id: 'sap-074', domain: 'improve', lesson: 'p-operations-at-scale', multi: false,
+      question: `A company has about 3,000 Amazon EC2 instances running Amazon Linux, Windows Server and Ubuntu across 60 accounts and four Regions. Each team patches differently, and auditors found critical patches missing for months. The operations team, which works from a delegated administrator account, must apply consistent patch baselines on a schedule in every account and Region, automatically include new accounts and instances, and report organization-wide patch compliance. Which solution requires the least operational overhead?`,
+      options: [
+        `Create a cron job on each instance that runs the operating system package manager weekly and emails the results.`,
+        `Use Systems Manager Quick Setup to create an organization-wide patch policy targeting all OUs and the four Regions, with patch baselines per operating system and a scan-and-install schedule, and view compliance centrally (for example through Systems Manager Explorer or a resource data sync to S3 queried with Athena).`,
+        `Build golden AMIs monthly with EC2 Image Builder and require teams to replace their instances with the new AMI.`,
+        `Run a Systems Manager Run Command document from each account once a month to install all available updates.`
+      ],
+      answer: [1],
+      explanation: `<b>B is correct.</b> Quick Setup patch policies deploy Patch Manager configuration across the organization's accounts and Regions from the management or delegated admin account, cover new accounts and instances automatically, and feed compliance data that can be viewed centrally.<br><b>A</b> is unmanaged, inconsistent and produces no central compliance view.<br><b>C</b> image pipelines are good practice but relying on teams to replace instances does not guarantee patching of running instances or report compliance.<br><b>D</b> is manual per account and Region, installs everything without baselines, and does not report compliance consistently.`
+    },
+    {
+      id: 'sap-075', domain: 'improve', lesson: 'p-operations-at-scale', multi: true,
+      question: `A company runs 180 accounts. Application logs are written to CloudWatch Logs in each account. The security team requires that all application logs be copied to a central Log Archive account within minutes, retained for seven years in a form that no one can delete or alter, and that the solution automatically covers new log groups. Which combination of steps should the solutions architect take? (Choose TWO.)`,
+      options: [
+        `Schedule a CloudWatch Logs export task (CreateExportTask) every hour in each account to export every log group to the Log Archive bucket.`,
+        `Create IAM users in each account with access keys that a central script uses to download logs nightly.`,
+        `Create a CloudWatch Logs destination in the Log Archive account backed by Amazon Data Firehose that delivers to S3, and configure account-level subscription filter policies in each account that send all log groups to that cross-account destination.`,
+        `Send all application logs to the management account so that SCPs protect them.`,
+        `Enable S3 Object Lock in compliance mode with a seven-year default retention on the Log Archive bucket.`
+      ],
+      answer: [2, 4],
+      explanation: `<b>C and E are correct.</b> A cross-account destination with Firehose delivers logs within minutes, and account-level subscription filter policies apply to all current and new log groups. Compliance-mode Object Lock makes the archived objects immutable for seven years, even for the root user.<br><b>A</b> export tasks are batch jobs that run one at a time per account, which does not meet the minutes requirement across many log groups.<br><b>B</b> introduces long-term credentials and a nightly custom process.<br><b>D</b> SCPs do not apply to the management account, and running workloads or log storage there is an anti-pattern.`
+    },
+    {
+      id: 'sap-076', domain: 'improve', lesson: 'p-operations-at-scale', multi: false,
+      question: `After a security incident, investigators must regularly answer questions such as "which principals called DeleteBucketPolicy in any account in the last four years". The organization trail writes CloudTrail logs to S3, but analysts struggle with creating and maintaining Athena tables and partitions across 200 accounts and many Regions. The security team, working from a delegated administrator account, wants to run SQL directly over organization-wide CloudTrail events with multi-year retention and minimal setup. What should the solutions architect recommend?`,
+      options: [
+        `Create an AWS CloudTrail Lake organization event data store from the delegated administrator account with a multi-year retention period, and run SQL queries in CloudTrail Lake.`,
+        `Use the CloudTrail Event history console in each account.`,
+        `Load CloudTrail logs into an Amazon RDS for PostgreSQL database with a nightly AWS Glue job.`,
+        `Enable Amazon GuardDuty and use its findings to answer the questions.`
+      ],
+      answer: [0],
+      explanation: `<b>A is correct.</b> CloudTrail Lake event data stores collect events organization-wide, retain them for years, and support SQL queries without managing tables or partitions.<br><b>B</b> Event history covers only 90 days of management events per account and Region.<br><b>C</b> is a custom pipeline and database to operate and scale.<br><b>D</b> GuardDuty produces threat findings, not a queryable record of every API call.`
+    },
+    {
+      id: 'sap-077', domain: 'improve', lesson: 'p-operations-at-scale', multi: false,
+      question: `A compliance team must produce a weekly report of every Amazon EBS volume that is unencrypted and every security group that allows inbound 0.0.0.0/0 on port 22, across 90 accounts and 8 Regions, along with the compliance status of 40 AWS Config rules. The team works from a security account that is the delegated administrator for AWS Config. The report must be generated from current configuration data without logging in to each account. What should the solutions architect recommend?`,
+      options: [
+        `Ask each account owner to export AWS Config data to CSV weekly and merge the files.`,
+        `Use AWS Trusted Advisor in each account and export its checks.`,
+        `Enable Amazon Inspector in all accounts and filter its findings for EBS encryption and security group rules.`,
+        `Create an organization-wide AWS Config aggregator in the delegated administrator account covering all Regions, use the aggregator's compliance view for rule status, and run advanced queries against the aggregator to list unencrypted volumes and open security groups.`
+      ],
+      answer: [3],
+      explanation: `<b>D is correct.</b> An organization aggregator collects configuration and compliance data from all accounts and Regions into the delegated administrator account, and advanced queries let the team query current resource configuration with SQL-like syntax across the aggregator.<br><b>A</b> is manual and error-prone.<br><b>B</b> Trusted Advisor checks are per account and do not report on custom Config rules.<br><b>C</b> Inspector scans for software vulnerabilities and network reachability; it is not a configuration inventory and does not report Config rule compliance.`
+    },
+    {
+      id: 'sap-078', domain: 'improve', lesson: 'p-operations-at-scale', multi: false,
+      question: `The operations team requires that the CloudWatch agent be installed and configured with a standard configuration from Parameter Store on every EC2 instance in 40 accounts, including instances launched later by any method, and that drift (for example, someone uninstalling the agent) be corrected automatically. All instances are already managed by Systems Manager. What should the solutions architect recommend?`,
+      options: [
+        `Add the agent installation commands to the user data of every launch template.`,
+        `Run a Systems Manager Run Command document across all instances once.`,
+        `Create Systems Manager State Manager associations (for example through Quick Setup across the organization) that install the CloudWatch agent and apply the configuration from Parameter Store, targeting all managed instances on a recurring schedule.`,
+        `Create a Lambda function that connects to each instance over SSH nightly to check for the agent.`
+      ],
+      answer: [2],
+      explanation: `<b>C is correct.</b> State Manager associations continuously enforce desired state on a schedule, apply automatically to new managed instances that match the targets, and re-apply configuration when drift occurs; Quick Setup can deploy them across the organization.<br><b>A</b> only covers instances launched from those templates and never corrects later drift.<br><b>B</b> is a one-time action that misses future instances and drift.<br><b>D</b> is custom, requires SSH access and keys, and is fragile.`
+    },
+    {
+      id: 'sap-079', domain: 'improve', lesson: 'p-operations-at-scale', multi: true,
+      question: `A security team must run a Systems Manager Automation runbook that rotates a local administrator configuration on EC2 instances in 80 accounts across 5 Regions. The runbook must be started once from a central operations account, roll out gradually with limits on how many accounts run at the same time, and stop if too many executions fail. Which steps are required? (Choose THREE.)`,
+      options: [
+        `Create an IAM user with access keys in each target account for the runbook to use.`,
+        `Deploy the AWS-SystemsManager-AutomationExecutionRole (or an equivalent execution role trusted by the central account) to every target account, for example with a service-managed StackSet.`,
+        `Deploy a Lambda function in each target account that runs the runbook locally on a schedule.`,
+        `Create the AWS-SystemsManager-AutomationAdministrationRole in the central operations account.`,
+        `Open inbound SSH from the operations account's VPC to all instances.`,
+        `Start a multi-account, multi-Region Automation execution from the central account that targets the OUs and Regions, with concurrency and error threshold settings.`
+      ],
+      answer: [1, 3, 5],
+      explanation: `<b>B, D and F are correct.</b> Multi-account Automation uses an administration role in the central account that assumes an execution role in each target account; the execution itself specifies target accounts or OUs, Regions, and rate controls (concurrency and error thresholds) for gradual, safe rollout.<br><b>A</b> long-term IAM user credentials are unnecessary and insecure; Automation uses roles.<br><b>C</b> decentralizes execution and loses the single controlled rollout.<br><b>E</b> Systems Manager does not need inbound SSH; the agent communicates outbound.`
+    },
+    {
+      id: 'sap-080', domain: 'improve', lesson: 'p-cost-optimization-governance', multi: false,
+      question: `A company's analysis of its Cost and Usage Report shows that NAT gateway data processing charges are among its top five line items. Most of the traffic comes from EC2 instances in private subnets of 40 spoke VPCs reading and writing large objects in Amazon S3 buckets in the same Region, and from Lambda functions in the same VPCs writing to Amazon DynamoDB. Internet egress to other destinations must continue through the existing NAT gateways. Which change reduces cost the MOST with the least effort?`,
+      options: [
+        `Replace the NAT gateways with NAT instances on Graviton EC2 instances.`,
+        `Create gateway VPC endpoints for Amazon S3 and Amazon DynamoDB in each spoke VPC and associate them with the private subnet route tables.`,
+        `Create interface VPC endpoints for S3 and DynamoDB in a shared services VPC and route all spoke traffic to them through the Transit Gateway.`,
+        `Move the S3 buckets to a different Region with lower storage prices.`
+      ],
+      answer: [1],
+      explanation: `<b>B is correct.</b> Gateway endpoints for S3 and DynamoDB are free, route traffic privately through route table entries, and remove that traffic from NAT gateway (and Transit Gateway) processing charges with no application changes.<br><b>A</b> NAT instances add management burden and availability risk and still process the traffic.<br><b>C</b> interface endpoints carry hourly and per-GB charges, and routing through the Transit Gateway adds TGW data processing charges.<br><b>D</b> cross-Region access adds data transfer charges and latency.`
+    },
+    {
+      id: 'sap-081', domain: 'improve', lesson: 'p-cost-optimization-governance', multi: false,
+      question: `A company gives each developer a sandbox account in a Sandbox OU. Several developers have left expensive GPU instances running, generating thousands of dollars of charges. The company wants each sandbox account to be automatically prevented from launching new resources once its monthly spend reaches 500 USD, with notification to the developer, and without writing custom code. What should the solutions architect recommend?`,
+      options: [
+        `Create an AWS Budgets cost budget for each sandbox account with an alert to the developer and a budget action that, when the threshold is reached, applies a restrictive SCP (for example denying ec2:RunInstances and other create actions) to that account.`,
+        `Enable AWS Cost Anomaly Detection and email the developers when anomalies are detected.`,
+        `Create a CloudWatch billing alarm in the management account for the whole organization.`,
+        `Attach an SCP to the Sandbox OU that denies all EC2 GPU instance types.`
+      ],
+      answer: [0],
+      explanation: `<b>A is correct.</b> Budget actions can apply an IAM policy or an SCP automatically (or after approval) when a budget threshold is crossed, enforcing a per-account spend guardrail without custom code, and budgets notify subscribers.<br><b>B</b> anomaly detection notifies but does not prevent further spending, and spend under a fixed cap may not be anomalous.<br><b>C</b> an organization-wide alarm cannot act per sandbox account and only notifies.<br><b>D</b> blocks GPUs entirely, including legitimate experimentation, and does not cap spending on other resources.`
+    },
+    {
+      id: 'sap-082', domain: 'improve', lesson: 'p-observability-performance', multi: false,
+      question: `An order-processing application uses an Amazon Aurora MySQL cluster with one writer and two Aurora Replicas. A business intelligence tool now runs long analytical queries during business hours through the cluster reader endpoint, and customer-facing read queries routed to the same reader endpoint have become slow and inconsistent. The company wants to isolate the analytical workload from customer reads with minimal application change. What should the solutions architect do?`,
+      options: [
+        `Point the BI tool at the cluster writer endpoint.`,
+        `Increase the instance class of the writer instance.`,
+        `Enable Aurora Serverless v2 on the writer so that it scales during analytical queries.`,
+        `Add an Aurora Replica dedicated to analytics and create an Aurora custom endpoint that contains only that replica for the BI tool, and a second custom endpoint containing the other replicas for customer-facing reads.`
+      ],
+      answer: [3],
+      explanation: `<b>D is correct.</b> Aurora custom endpoints group specific instances, so the BI tool's heavy queries run on a dedicated replica while customer reads use separate replicas – only connection strings change.<br><b>A</b> moves analytics onto the writer and hurts transactional performance.<br><b>B</b> the slow queries run on readers, so a larger writer does not help.<br><b>C</b> scaling the writer does not isolate reader traffic, and analytics would still share the reader endpoint with customers.`
+    },
+    {
+      id: 'sap-083', domain: 'improve', lesson: 'p-cost-optimization-governance', multi: true,
+      question: `A genomics company runs two workloads on On-Demand EC2 instances. The first is a 24/7 API tier with a stable baseline that the team expects to move partly to AWS Fargate next year. The second is a nightly batch pipeline of containerized, checkpointing jobs that can be interrupted and restarted, currently using one instance type that is sometimes unavailable. Right-sizing has already been completed. Which purchasing changes will reduce cost the MOST while maintaining reliability? (Choose TWO.)`,
+      options: [
+        `Run the batch pipeline on Spot Instances diversified across many instance types and Availability Zones with a price-capacity-optimized allocation strategy.`,
+        `Move both workloads to Dedicated Hosts.`,
+        `Buy Convertible Reserved Instances for the peak capacity of the batch pipeline.`,
+        `Purchase a Compute Savings Plan sized to the API tier's steady baseline usage.`,
+        `Move the API tier to larger instance sizes to reduce the number of instances.`
+      ],
+      answer: [0, 3],
+      explanation: `<b>A and D are correct.</b> Interruptible, checkpointing batch jobs are ideal for Spot, and diversifying instance types and AZs improves capacity availability. A Compute Savings Plan discounts the steady baseline and continues to apply after the move to Fargate.<br><b>B</b> Dedicated Hosts are for licensing or compliance and cost more.<br><b>C</b> committing to peak batch capacity that runs only at night wastes most of the commitment.<br><b>E</b> right-sizing is complete, and larger instances do not reduce the price per unit of compute.`
+    },
+    // ---------------- migrate (expanded) ----------------
+    {
+      id: 'sap-084', domain: 'migrate', lesson: 'p-modernization-patterns', multi: false,
+      question: `A retailer is decomposing a monolithic order management system that runs on EC2 with an on-premises-style Oracle database hosted on Amazon RDS for Oracle. The first new microservice, a customer notification service, needs to react within seconds to order status changes. The monolith's code is fragile, and the team is not allowed to modify it to publish events. What should the solutions architect recommend?`,
+      options: [
+        `Have the notification service poll the monolith's orders table every second.`,
+        `Add database triggers to the monolith's tables that call the notification service's API.`,
+        `Use an AWS DMS task with ongoing replication (CDC) from the RDS for Oracle database to Amazon Kinesis Data Streams, and have the notification service consume the change stream.`,
+        `Schedule nightly exports of the orders table to Amazon S3 and process them with AWS Glue.`
+      ],
+      answer: [2],
+      explanation: `<b>C is correct.</b> DMS change data capture streams committed changes from the monolith's database to Kinesis without touching application code – the event interception pattern – and the new service consumes them within seconds.<br><b>A</b> aggressive polling adds load to the shared database and couples the new service to the monolith's schema.<br><b>B</b> triggers modify the monolith's database and add synchronous dependencies to every transaction.<br><b>D</b> nightly exports cannot meet a seconds-level requirement.`
+    },
+    {
+      id: 'sap-085', domain: 'migrate', lesson: 'p-modernization-patterns', multi: false,
+      question: `A company is applying the strangler fig pattern to a monolithic web application that runs on EC2 instances behind an internal Application Load Balancer in private subnets. New capabilities such as /orders and /returns are being built as AWS Lambda functions. The company wants a single public HTTPS entry point with JWT validation, wants requests for each path routed deterministically to either the monolith or the new function, and the monolith must not become internet-facing. What should the solutions architect recommend?`,
+      options: [
+        `Create Route 53 weighted records that send 20% of requests to the Lambda functions and 80% to the monolith.`,
+        `Create an Amazon API Gateway HTTP API with a JWT authorizer, add routes for /orders and /returns that integrate with the Lambda functions, and a default route that integrates with the internal ALB through a VPC link.`,
+        `Modify the monolith to call the Lambda functions for every order and return request.`,
+        `Change the ALB scheme to internet-facing and add Lambda target groups for the new paths.`
+      ],
+      answer: [1],
+      explanation: `<b>B is correct.</b> An HTTP API provides the public façade with JWT authorization, path-based routes to the new Lambda functions, and a private integration to the internal ALB through a VPC link, so the monolith stays private while capabilities are peeled off one by one.<br><b>A</b> weighted DNS splits traffic randomly rather than by capability, so the same path would hit different implementations.<br><b>C</b> deepens coupling with the monolith and requires changing it.<br><b>D</b> makes the monolith's load balancer internet-facing, violating the requirement (an ALB can route to Lambda, but not while staying internal for public users).`
+    },
+    {
+      id: 'sap-086', domain: 'migrate', lesson: 'p-modernization-patterns', multi: true,
+      question: `After decomposing a monolith, placing an order now involves an orders service (Amazon DynamoDB), a payments service (Amazon Aurora) and an inventory service (Amazon DynamoDB in another account). Previously a single database transaction kept them consistent. The company needs the order to either complete across all services or be reliably undone, and it must never publish an OrderPlaced event for an order whose write was rolled back. Which approaches should the solutions architect recommend? (Choose TWO.)`,
+      options: [
+        `Implement a two-phase commit coordinator that locks rows in all three databases.`,
+        `Orchestrate the steps with an AWS Step Functions saga that calls each service and runs compensating actions (refund payment, release inventory, cancel order) when a later step fails.`,
+        `Move all three services back to a single shared database so that one transaction covers everything.`,
+        `Use the transactional outbox pattern: the orders service writes the order and the outgoing event in the same transaction (for example, an item whose DynamoDB stream is relayed to EventBridge), so events are published only for committed writes.`,
+        `Have the orders service call payments and inventory synchronously and retry indefinitely until both succeed.`
+      ],
+      answer: [1, 3],
+      explanation: `<b>B and D are correct.</b> A saga replaces a distributed transaction with a sequence of local transactions and compensations, which Step Functions orchestrates with retries and catch logic. The transactional outbox guarantees that events are emitted only for committed state changes.<br><b>A</b> two-phase commit is not supported across these managed databases and creates blocking, fragile coupling.<br><b>C</b> reverses the decomposition and recreates the monolith's coupling.<br><b>E</b> indefinite synchronous retries cause cascading failures and provide no way to undo partial work.`
+    },
+    {
+      id: 'sap-087', domain: 'migrate', lesson: 'p-modernization-patterns', multi: false,
+      question: `A company is moving 30 self-managed PostgreSQL 15 databases (50 GB to 2 TB each) from on-premises servers to Amazon Aurora PostgreSQL. Schemas, extensions and stored functions are compatible. The DBA team is small and wants a managed approach that performs the initial load and ongoing replication using PostgreSQL's native mechanisms, without provisioning or sizing replication instances, so that each cutover takes only minutes. Which approach should the solutions architect recommend?`,
+      options: [
+        `Use AWS DMS homogeneous data migrations with data providers for the source and target, running full load plus ongoing replication, and cut over each database when replication is caught up.`,
+        `Convert each schema with AWS SCT and then run AWS DMS heterogeneous tasks on provisioned replication instances.`,
+        `Rehost the database servers onto EC2 with AWS Application Migration Service and then manually configure Aurora replication.`,
+        `Ship pg_dump files to AWS on Snowball Edge devices and restore them into Aurora.`
+      ],
+      answer: [0],
+      explanation: `<b>A is correct.</b> DMS homogeneous data migrations are designed for like-to-like migrations, use the engine's native tools for full load and change replication, and run serverlessly, so the team does not manage replication instances and cutover requires only a short pause.<br><b>B</b> schema conversion is unnecessary for PostgreSQL to Aurora PostgreSQL, and provisioned instances add sizing work.<br><b>C</b> moves the servers to EC2, adding a second migration step with manual replication.<br><b>D</b> offline dumps have no ongoing replication, so cutover downtime would be long, and the databases are small enough for the network.`
+    },
+    {
+      id: 'sap-088', domain: 'migrate', lesson: 'p-migration-strategy', multi: false,
+      question: `A company has 2,500 VMs running on VMware vSphere with NSX networking in two data centers whose leases expire in 10 months. The infrastructure team has deep VMware expertise and runbooks built around vCenter, and the company wants to move quickly without re-platforming each VM or retraining operations staff, while gaining the ability to integrate with native AWS services over time. Which approach should the solutions architect recommend?`,
+      options: [
+        `Rehost every VM to Amazon EC2 with AWS Application Migration Service.`,
+        `Refactor the applications into containers on Amazon EKS before the lease expires.`,
+        `Export each VM with VM Import/Export and launch it as an EC2 instance.`,
+        `Relocate the VMware environment to Amazon Elastic VMware Service (Amazon EVS) running in the company's VPC, and migrate the VMs with VMware HCX.`
+      ],
+      answer: [3],
+      explanation: `<b>D is correct.</b> Relocating to Amazon EVS keeps vSphere, vCenter and NSX tooling and skills, moves VMs without converting them (for example with VMware HCX), and places the environment in the company's own VPC next to native AWS services.<br><b>A</b> is a valid rehost path but converts every VM to EC2 and changes operational tooling, which the company wants to avoid.<br><b>B</b> refactoring 2,500 VMs in 10 months is unrealistic.<br><b>C</b> VM Import is a per-VM, downtime-heavy process that also abandons the VMware operating model.`
+    },
+    {
+      id: 'sap-089', domain: 'migrate', lesson: 'p-server-database-migration', multi: false,
+      question: `A financial company is rehosting 400 servers with AWS Application Migration Service. Corporate policy states that replication data must never traverse the public internet and that replication servers must not have public IP addresses. The data center connects to the target VPC over AWS Direct Connect with a private VIF. What should the solutions architect configure?`,
+      options: [
+        `Use the default replication settings, which send data over the internet with TLS encryption.`,
+        `Ship the server disks on Snowball Edge devices and use Application Migration Service only for the cutover.`,
+        `Configure the replication settings template to use a private IP address for data replication with a staging area subnet reachable over Direct Connect, disable public IPs on replication servers, and create VPC interface endpoints for the Application Migration Service, EC2 and S3 (and related) endpoints so that agents and replication servers communicate privately.`,
+        `Install a third-party VPN client on every source server that tunnels to the staging subnet over the internet.`
+      ],
+      answer: [2],
+      explanation: `<b>C is correct.</b> Application Migration Service supports private connectivity: replication servers in the staging subnet receive data over private IPs through Direct Connect, and VPC endpoints keep agent and service API communication off the internet.<br><b>A</b> the default can use public IPs, violating the policy.<br><b>B</b> offline shipment breaks continuous block replication, so cutover would require long downtime.<br><b>D</b> still traverses the internet and adds a fleet of VPN clients to manage.`
+    },
+    {
+      id: 'sap-090', domain: 'migrate', lesson: 'p-data-transfer', multi: true,
+      question: `A media analytics company is migrating an on-premises Hadoop cluster that stores 800 TB in HDFS and runs nightly Spark jobs. A dedicated 10 Gbps Direct Connect connection is mostly idle, and the migration must finish within three months. After migration, the company wants to stop paying for idle cluster capacity during the day and keep the data durable independently of any cluster. Which actions should the solutions architect recommend? (Choose TWO.)`,
+      options: [
+        `Order an AWS Snowmobile to move the 800 TB.`,
+        `Use AWS DataSync with an HDFS source location and an S3 destination over the Direct Connect connection, scheduling incremental transfers until cutover.`,
+        `Deploy a Volume Gateway and copy HDFS data to iSCSI volumes.`,
+        `Recreate HDFS on a long-running Amazon EMR cluster with large core nodes and copy the data into it.`,
+        `Run the Spark jobs on transient Amazon EMR clusters (or EMR Serverless) that read and write data in Amazon S3, using Spot Instances for task nodes.`
+      ],
+      answer: [1, 4],
+      explanation: `<b>B and E are correct.</b> At 10 Gbps the link can move roughly 100 TB per day at full utilization, so 800 TB fits comfortably within three months, and DataSync supports HDFS sources with verification and incremental runs. Storing data in S3 and running transient EMR clusters or EMR Serverless with Spot task nodes removes idle capacity and decouples durability from compute.<br><b>A</b> Snowmobile has been retired, and offline transfer is unnecessary with this bandwidth.<br><b>C</b> Volume Gateway provides block volumes for on-premises applications and does not suit an HDFS migration.<br><b>D</b> a long-running cluster with HDFS keeps paying for idle capacity and ties data durability to the cluster.`
+    },
+    {
+      id: 'sap-091', domain: 'migrate', lesson: 'p-migration-strategy', multi: false,
+      question: `A company is migrating 60 Microsoft SQL Server Enterprise servers to AWS. It owns licenses without Software Assurance mobility rights, licensed per physical core, and the license terms require visibility into physical sockets and cores. The company wants to bring these licenses, track usage to stay compliant, and prevent launches that would exceed the license count. What should the solutions architect recommend?`,
+      options: [
+        `Use Amazon RDS for SQL Server with the License Included model.`,
+        `Launch the instances on EC2 Dedicated Hosts, and use AWS License Manager with license rules for core counts and host resource groups to manage host allocation and enforce limits.`,
+        `Launch the instances on shared-tenancy EC2 and count vCPUs manually each month.`,
+        `Use EC2 Dedicated Instances so that the hardware is not shared with other customers.`
+      ],
+      answer: [1],
+      explanation: `<b>B is correct.</b> Dedicated Hosts expose physical sockets and cores for BYOL licenses that require them, and License Manager tracks consumption, enforces limits and can automate host allocation through host resource groups.<br><b>A</b> License Included means paying for new licenses rather than bringing existing ones.<br><b>C</b> shared tenancy does not give socket/core visibility, so the licenses cannot be used compliantly, and manual counting is error-prone.<br><b>D</b> Dedicated Instances isolate hardware but do not give visibility or control of physical sockets and cores.`
+    },
+    {
+      id: 'sap-092', domain: 'migrate', lesson: 'p-modernization', multi: false,
+      question: `A company runs 120 ASP.NET applications built on .NET Framework 4.x on Windows Server VMs. Windows licensing and patching costs are high. Leadership wants to move the applications to Linux containers on AWS to reduce cost, accepting code changes as long as the porting effort is largely automated and the team can review the changes. What should the solutions architect recommend?`,
+      options: [
+        `Rehost the VMs to EC2 Windows instances with AWS Application Migration Service and purchase Windows Savings Plans.`,
+        `Replatform the applications to AWS Elastic Beanstalk on Windows Server.`,
+        `Containerize the applications as Windows containers on Amazon ECS without code changes.`,
+        `Use AWS Transform for .NET to analyze and port the applications from .NET Framework to cross-platform .NET, review and test the changes, then build Linux container images and run them on Amazon ECS on AWS Fargate.`
+      ],
+      answer: [3],
+      explanation: `<b>D is correct.</b> AWS Transform for .NET automates much of the port from .NET Framework to cross-platform .NET, producing changes the team can review; the ported applications can then run in Linux containers on Fargate, removing Windows licensing and host patching.<br><b>A</b> keeps Windows licensing and VM management – a rehost, not the modernization requested.<br><b>B</b> still runs on Windows Server and keeps the licensing cost.<br><b>C</b> Windows containers keep Windows licensing and larger images; .NET Framework cannot run in Linux containers without porting.`
     }
   ]
 };
